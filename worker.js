@@ -64,9 +64,8 @@ export class Room{
     if(action==='audio'&&req.method==='POST'){
       if(!room.teacher||req.headers.get('Authorization')!=='Bearer '+room.teacher)return json({error:'Acceso denegado'},403);
       const board=this.sockets('board')[0], state=board?.deserializeAttachment();
-      if(!state?.ready||state.busy||this.inflight)return json({error:'Pizarra ocupada o desconectada'},409);
-      if(this.lastTurn&&Date.now()-this.lastTurn<2500)return json({error:'Espera antes de volver a hablar'},429);
-      this.inflight=true;this.lastTurn=Date.now();
+      if(!state?.ready||this.inflight)return json({error:'Pizarra ocupada o desconectada'},409);
+      this.inflight=true;
       try{
         const length=Number(req.headers.get('Content-Length'));
         if(!length||length>420000)return json({error:'Fragmento inválido'},413);
