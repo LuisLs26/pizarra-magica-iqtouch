@@ -50,7 +50,7 @@ export function voice(){
       if(id!==serial)return;
       const decoded=await context.decodeAudioData(await blob.arrayBuffer());
       if(id!==serial)return;
-      await play(decoded,volume,1.13,()=>onStart('Piper'));return;
+      await play(decoded,volume,1.31,()=>onStart('Piper'));return;
     }catch(error){
       if(id!==serial)return;
       console.warn('Piper:',error.message);
@@ -59,7 +59,7 @@ export function voice(){
         const watchdog=setTimeout(()=>{resolve=null;stop();reject(Error('La voz del navegador no se inició'));},8000);
         resolve=()=>{clearTimeout(watchdog);done();};utterance=new SpeechSynthesisUtterance(text);utterance.lang='es-PE';
         utterance.voice=speechSynthesis.getVoices().find(v=>v.localService&&v.lang.startsWith('es'))||null;
-        utterance.pitch=1.3;utterance.rate=1.1;utterance.volume=volume;
+        utterance.pitch=1.65;utterance.rate=1.1;utterance.volume=volume;
         utterance.onstart=()=>{clearTimeout(watchdog);onStart('Voz del navegador');};
         utterance.onboundary=e=>{target={until:performance.now()+Math.min(400,120+(e.charLength||1)*27),amount:.35};};
         utterance.onend=()=>{clearTimeout(watchdog);resolve=null;utterance=null;done();};
