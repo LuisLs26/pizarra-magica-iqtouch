@@ -10,7 +10,7 @@ export default {async fetch(req,env){
     const id=random();
     return env.ROOMS.getByName(id).fetch(new Request(url.origin+'/create',{method:'POST'}));
   }
-  const match=url.pathname.match(/^\/api\/(socket|claim|audio)\/([a-f0-9]{32})$/);
+  const match=url.pathname.match(/^\/api\/(socket|claim|audio|transcribe)\/([a-f0-9]{32})$/);
   if(!match)return json({error:'Ruta inválida'},404);
   return env.ROOMS.getByName(match[2]).fetch(req);
 }};
@@ -28,7 +28,7 @@ export class Budget{
   }
 }
 export class Room{
-  constructor(ctx,env){this.ctx=ctx;this.env=env;this.inflight=false;}
+  constructor(ctx,env){this.ctx=ctx;this.env=env;this.inflight=false;this.transcribing=0;}
   sockets(role){return this.ctx.getWebSockets(role);}
   send(role,message){for(const socket of this.sockets(role))try{socket.send(JSON.stringify(message));}catch{}}
   async fetch(req){
@@ -61,16 +61,17 @@ export class Room{
       if(this.sockets(other).length){server.send(JSON.stringify({type:'peer'}));this.send(other,{type:'peer'});}
       return new Response(null,{status:101,webSocket:client});
     }
-    if(action==='audio'&&req.method==='POST'){
+    if((action==='audio'||action==='transcribe')&&req.method==='POST'){
+      const transcriptionOnly=action==='transcribe';
       if(!room.teacher||req.headers.get('Authorization')!=='Bearer '+room.teacher)return json({error:'Acceso denegado'},403);
       const board=this.sockets('board')[0], state=board?.deserializeAttachment();
-      if(!state?.ready||this.inflight)return json({error:'Pizarra ocupada o desconectada'},409);
-      this.inflight=true;
+      if(!state?.ready||(transcriptionOnly?this.transcribing>=3:this.inflight))return json({error:'Pizarra ocupada o desconectada'},409);
+      if(transcriptionOnly)this.transcribing++;else this.inflight=true;
       try{
         const length=Number(req.headers.get('Content-Length'));
         if(!length||length>420000)return json({error:'Fragmento inválido'},413);
         const input=await req.json();
-        const direct=typeof input.question==='string'?input.question.trim().slice(0,500):'';
+        const direct=!transcriptionOnly&&typeof input.question==='string'?input.question.trim():'';
         if(!direct&&(typeof input.audio!=='string'||input.audio.length>390000||!input.audio.startsWith('UklGR')||!/^[A-Za-z0-9+/]+=*$/.test(input.audio)))return json({error:'Audio inválido'},400);
         const budget=await this.env.BUDGET.getByName('daily').fetch('https://internal/budget');
         if(!budget.ok)return json({error:'Límite diario alcanzado'},429);
@@ -79,8 +80,9 @@ export class Room{
           const whisperStarted=performance.now();
           const transcription=await this.env.AI.run('@cf/openai/whisper-large-v3-turbo',{audio:input.audio,language:'es',beam_size:1,vad_filter:true,condition_on_previous_text:false});
           whisperMs=performance.now()-whisperStarted;
-          question=transcription.text?.trim().slice(0,500);
+          question=transcription.text?.trim()||'';
         }
+        if(transcriptionOnly)return json({question});
         if(!question)return json({silent:true});
         const context=Array.isArray(input.context)?input.context.slice(-3).flatMap(turn=>typeof turn?.question==='string'&&typeof turn?.answer==='string'?[{role:'user',content:turn.question.slice(0,500)},{role:'assistant',content:turn.answer.slice(0,700)}]:[]):[];
         const intensity=['suave','normal','alta'].includes(input.intensity)?input.intensity:'normal';
@@ -97,7 +99,7 @@ export class Room{
       }catch(error){
         const quota=/quota|neurons|allocation|rate.limit/i.test(String(error));
         return json({error:quota?'Cuota de Workers AI agotada':'Workers AI no pudo completar el turno'},quota?429:502);
-      }finally{this.inflight=false;}
+      }finally{if(transcriptionOnly)this.transcribing--;else this.inflight=false;}
     }
     return json({error:'Solicitud inválida'},400);
   }
