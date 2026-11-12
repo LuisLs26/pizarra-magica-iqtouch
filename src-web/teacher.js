@@ -31,7 +31,7 @@ function render(){
 function receive(m){
   if(m.type==='peer'){peer=true;$('connection').textContent='Pizarra conectada';}
   if(m.type==='peer-left'){peer=false;ready=false;$('connection').textContent='Pizarra desconectada. Esperando reconexión…';}
-  if(m.type==='state'){ready=m.ready;if(busy&&!m.busy)cooldown=performance.now()+1000;busy=m.busy;}
+  if(m.type==='state'){ready=m.ready;if(busy&&!m.busy)cooldown=performance.now()+450;busy=m.busy;}
   if(m.type==='provider')$('voice').textContent='Voz de la pizarra · '+m.provider;
   if(m.type==='end'){halt();link.close();peer=false;ready=false;sessionStorage.removeItem('teacher');$('connection').textContent='Sesión finalizada. Escanea un nuevo QR.';}
   if(m.type==='snapshot'&&snapshotAction){
@@ -59,7 +59,12 @@ const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
 const engine=document.createElement('select');
 engine.setAttribute('aria-label','Motor de transcripción');
 engine.add(new Option('Whisper','whisper'));
-if(Recognition)engine.add(new Option('Reconocimiento rápido del navegador (Google en Chrome)','browser'));
+if(Recognition){
+  engine.add(new Option('Reconocimiento rápido del navegador (Google en Chrome)','browser'));
+  const googleChrome=navigator.userAgentData?.brands?.some(({brand})=>brand==='Google Chrome')
+    ??(/\bChrome\//.test(navigator.userAgent)&&!/Edg|OPR|SamsungBrowser/.test(navigator.userAgent));
+  if(googleChrome)engine.value='browser';
+}
 const engineLabel=document.createElement('label');
 engineLabel.append('Transcripción ',engine);
 $('mic').before(engineLabel);
@@ -104,7 +109,7 @@ async function submit(input){
     const next=[...history,{question:m.question,answer:m.answer,date:Date.now(),session:session.id}].slice(-300);
     if(persist('history',next)){history=next;render();}
     if(!peer||!link.send({type:'reply',answer:m.answer}))throw Error('La pizarra se desconectó antes de recibir la respuesta');
-    cooldown=performance.now()+2000;
+    cooldown=performance.now()+900;
     $('ai').textContent=input.question?'Gemma respondió correctamente.':'Whisper y Gemma respondieron correctamente.';
   }catch(e){if(!request.signal.aborted)$('ai').textContent=e.message;}finally{if(pending===request)pending=null;}
 }

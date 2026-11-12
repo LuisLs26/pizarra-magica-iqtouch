@@ -40,12 +40,14 @@ export function voice(){
     const id=serial;
     try{
       if(context?.state!=='running')throw Error('Audio bloqueado');
+      const localVoice=globalThis.speechSynthesis?.getVoices().find(v=>v.localService&&/^es(?:-|$)/i.test(v.lang));
+      const waitForPiper=localVoice?700:18000;
       let timeout;
       const prediction=Promise.resolve(warmup).then(()=>{
         if(id!==serial)return;
         return getPiper().then(piper=>piper.predict({text,voiceId}));
       });
-      const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Piper tardó en cargar')),18000);});
+      const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Piper tardó en cargar')),waitForPiper);});
       const blob=await Promise.race([prediction,deadline]).finally(()=>clearTimeout(timeout));
       if(id!==serial)return;
       const decoded=await context.decodeAudioData(await blob.arrayBuffer());
