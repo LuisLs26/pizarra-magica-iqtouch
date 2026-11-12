@@ -1,7 +1,21 @@
 export function voice(){
-  let context, analyser, gain, source, resolve, serial=0, utterance, browserLevel=0, target=0, model;
+  let context, analyser, gain, source, resolve, serial=0, utterance, browserLevel=0, target=0, model, warmup;
   const samples=new Uint8Array(512);
+  const voiceId='es_ES-davefx-medium';
+  function getPiper(){
+    model??=import('@mintplex-labs/piper-tts-web').catch(error=>{
+      model=null;
+      throw error;
+    });
+    return model;
+  }
+  function prepare(){
+    warmup??=getPiper().then(piper=>piper.predict({text:'Hola.',voiceId})).then(()=>{},()=>{
+      warmup=null;
+    });
+  }
   function unlock(){
+    prepare();
     context??=new AudioContext();
     if(!analyser){analyser=context.createAnalyser();analyser.fftSize=512;gain=context.createGain();analyser.connect(gain).connect(context.destination);}
     context.resume().catch(()=>{});
@@ -26,9 +40,11 @@ export function voice(){
     const id=serial;
     try{
       if(context?.state!=='running')throw Error('Audio bloqueado');
-      model??=import('@mintplex-labs/piper-tts-web');
       let timeout;
-      const prediction=model.then(piper=>piper.predict({text,voiceId:'es_ES-davefx-medium'}));
+      const prediction=Promise.resolve(warmup).then(()=>{
+        if(id!==serial)return;
+        return getPiper().then(piper=>piper.predict({text,voiceId}));
+      });
       const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Piper tardó en cargar')),18000);});
       const blob=await Promise.race([prediction,deadline]).finally(()=>clearTimeout(timeout));
       if(id!==serial)return;

@@ -28,7 +28,7 @@ export async function microphone(allowed,submit,ended){
       else{silence+=duration;if(!started&&silence>.15)speech=0;}
       frames.push(data);
       if(!started){while(frames.length>Math.ceil(.25/duration))frames.shift();return;}
-      if(silence<.65&&frames.length*duration<8)return;
+      if(silence<.55&&frames.length*duration<8)return;
       if(speech>=.25){
         const all=new Float32Array(frames.reduce((total,frame)=>total+frame.length,0));let index=0;
         for(const frame of frames){all.set(frame,index);index+=frame.length;}
