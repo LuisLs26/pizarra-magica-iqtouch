@@ -1,9 +1,10 @@
 import QRCode from 'qrcode';
-import {recognize,validStrokes,bounds} from './face.js';
+import {recognize,validStrokes} from './face.js';
 import {connect} from './link.js';
 import {voice} from './voice.js';
 const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
 let pairingTimer, interruption, returning=false;
+let mouthOpening=0, lastFrame=0;
 let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
 const active=new Map();
 const audio=voice();
@@ -20,10 +21,49 @@ canvas.onpointerdown=e=>{
   const line=[point(e)];active.set(e.pointerId,line);strokes.push(line);
 };
 canvas.onpointermove=e=>{const line=active.get(e.pointerId);if(!line)return;for(const sample of e.getCoalescedEvents?.().length?e.getCoalescedEvents():[e])if(line.length<500)line.push(point(sample));};
-function finish(e){if(!active.delete(e.pointerId)||active.size)return;timer=setTimeout(()=>{face=recognize(strokes);saveBoard();state();},1500);}
+function finish(e){if(!active.delete(e.pointerId)||active.size)return;timer=setTimeout(()=>{face=recognize(strokes);saveBoard();state();},2200);}
 canvas.onpointerup=canvas.onpointercancel=canvas.onlostpointercapture=finish;
 function state(){link?.send({type:'state',ready:!!face,busy});}
 const moods={alegría:[1,1],sorpresa:[1.35,1.5],confusión:[.8,.9],curiosidad:[1.15,1],risa:[.65,1.6],tristeza:[.8,.65],pensamiento:[.9,.8],entusiasmo:[1.25,1.3]};
+
+function trace(line,transform){
+  line.forEach((point,i)=>{
+    const [x,y]=transform(point);
+    if(i===0)ctx.moveTo(x*width,y*height);else ctx.lineTo(x*width,y*height);
+    if(line.length===1)ctx.lineTo(x*width+.01,y*height);
+  });
+}
+
+function curve(points,move){
+  const [x,y]=points[0];
+  if(move)ctx.moveTo(x*width,y*height);else ctx.lineTo(x*width,y*height);
+  for(let i=1;i<points.length-1;i++){
+    const [x,y]=points[i], [nextX,nextY]=points[i+1];
+    ctx.quadraticCurveTo(x*width,y*height,(x+nextX)*width*.5,(y+nextY)*height*.5);
+  }
+  const [endX,endY]=points.at(-1);
+  ctx.lineTo(endX*width,endY*height);
+}
+
+function openMouth(mouth,amount){
+  const {top,bottom,width:span,height:depth}=mouth.profile;
+  const opening=Math.min(span*.53,span*.26+depth*.35)*amount;
+  const upper=top.map(([x,y],i)=>[x,y-opening*.30*Math.sin(Math.PI*i/(top.length-1))]);
+  const lower=bottom.map(([x,y],i)=>[x,y+opening*.70*Math.sin(Math.PI*i/(bottom.length-1))]);
+  ctx.beginPath();curve(upper,true);curve(lower.slice().reverse(),false);ctx.closePath();
+  ctx.fillStyle='#3b202a';ctx.fill();
+  const middle=upper.length>>1;
+  const [x,y]=lower[middle];
+  const interior=y-upper[middle][1];
+  ctx.save();
+  ctx.clip();
+  ctx.beginPath();
+  ctx.ellipse(x*width,(y-interior*.15)*height,span*width*.28,interior*height*.30,0,0,2*Math.PI);
+  ctx.fillStyle='#f47c91';ctx.fill();
+  ctx.restore();
+  ctx.beginPath();curve(upper,true);curve(lower.slice().reverse(),false);ctx.closePath();ctx.stroke();
+}
+
 function frame(t){
   if(t>nextBlink){
     blinkStart=t;
@@ -34,6 +74,9 @@ function frame(t){
   const blink=Math.max(blinkWave(0),doubleBlink?blinkWave(205):0);
   const voiceLevel=audio.level();
   const speech=Math.min(1,voiceLevel*3);
+  const dt=Math.min(45,t-lastFrame);
+  lastFrame=t;
+  mouthOpening+=(speech-mouthOpening)*(1-Math.exp(-dt/(speech>mouthOpening?29:70)));
   const gaze=Math.tanh(Math.sin(t/1030)*2)*.7+Math.sin(t/473)*.13;
   const gazeUp=Math.sin(t/1570)*.45;
   const glance=Math.sin(t/315)*speech*.22;
@@ -43,25 +86,50 @@ function frame(t){
   ctx.clearRect(0,0,width,height);
   ctx.strokeStyle='#171819';ctx.lineWidth=Math.max(3,Math.min(width,height)*.008);ctx.lineCap=ctx.lineJoin='round';
   strokes.forEach((line,i)=>{
-    const group=face?.findIndex(g=>g.ids.includes(i))??-1, anchor=face?.[group], pupil=group>=0&&group<2&&anchor.ids[0]!==i;
-    ctx.beginPath();
-    line.forEach(([x,y],j)=>{
-      if(anchor&&group<2){
-        const open=Math.max(.06,(mood[0]+breath*.09+speech*.22)*(1-blink*.96));
-        x+=(gaze+glance)*(pupil?.013:.003);
-        y=anchor.y+(y-anchor.y+(pupil?gazeUp*.011:0))*open+gazeUp*.003;
+    const anchor=face?.find(group=>group.ids.includes(i));
+    const role=anchor?.role;
+    const pupil=anchor?.pupils?.includes(i);
+    if(role==='mouth'&&mouthOpening>.065){
+      if(i===anchor.ids[0]){
+        openMouth(anchor,mouthOpening);
+        ctx.beginPath();
+        for(const id of anchor.details)trace(strokes[id],([x,y])=>[x,y+anchor.profile.width*mouthOpening*.06]);
+        ctx.stroke();
       }
-      if(group===2){
+      return;
+    }
+    const eyeOpen=Math.max(.06,(mood[0]+breath*.09+speech*.22)*(1-blink*.96));
+    const eyeX=(pupil?anchor.w*.13+.001:Math.min(.003,(anchor?.w||0)*.08));
+    const transform=([x,y])=>{
+      if(role==='eye'){
+        x+=(gaze+glance)*eyeX;
+        y=anchor.y+(y-anchor.y+(pupil?gazeUp*anchor.h*.13:0))*eyeOpen+gazeUp*.003;
+      }
+      if(role==='mouth'){
         const center=Math.max(0,1-Math.abs(x-anchor.x)/.13);
-        const idle=1-speech;
-        x=anchor.x+(x-anchor.x)*(1+idle*(breath*.04+smile*.07));
-        y=anchor.y+(y-anchor.y)*(mood[1]+voiceLevel*2+idle*breath*.1);
-        y+=center*(voiceLevel*.024+idle*smile*.008+(expression==='tristeza'?-.006:0));
+        x=anchor.x+(x-anchor.x)*(1+breath*.04+smile*.07);
+        y=anchor.y+(y-anchor.y)*(1+breath*.1);
+        y+=center*(smile*.007+(expression==='tristeza'?-.005:0));
       }
-      if(j===0)ctx.moveTo(x*width,y*height);else ctx.lineTo(x*width,y*height);
-      if(line.length===1)ctx.lineTo(x*width+.01,y*height);
-    });
-    ctx.stroke();
+      if(role==='brow'){
+        const lift=anchor.w*(.12*speech+.08*breath+(expression==='sorpresa'?.17:0));
+        y-=lift+(x-anchor.x)*anchor.side*(gaze*.15+speech*.10);
+      }
+      if(role==='lash')y+=blink*.009-speech*.002;
+      if(role==='nose')y+=breath*.0015-speech*.002;
+      if(role==='cheek'){y-=smile*.005+speech*.003;x+=anchor.side*smile*.002;}
+      if(role==='ear')x+=(x-anchor.x)*breath*.05;
+      return [x,y];
+    };
+    ctx.beginPath();trace(line,transform);ctx.stroke();
+    if(role==='eye'&&anchor.addPupil&&eyeOpen>.13){
+      ctx.save();ctx.closePath();ctx.clip();
+      const [x,y]=transform([anchor.x+(gaze+glance)*anchor.w*.17,anchor.y+gazeUp*anchor.h*.2]);
+      ctx.beginPath();
+      const radius=Math.min(anchor.w*width,anchor.h*height)*.115;
+      ctx.ellipse(x*width,y*height,radius,Math.max(.35,radius*eyeOpen),0,0,2*Math.PI);
+      ctx.fillStyle='#171819';ctx.fill();ctx.restore();
+    }
   });
   requestAnimationFrame(frame);
 }
@@ -94,13 +162,7 @@ function receive(m){
       case 'say':say(m.value);break;
       case 'snapshot':link.send({type:'snapshot',strokes});break;
       case 'restore':if(validStrokes(m.value)){stop();clearTimeout(timer);active.clear();strokes=m.value;face=recognize(strokes);saveBoard();state();}break;
-      case 'correct':{
-        const points=m.value;
-        const boxes=strokes.map(bounds);
-        const ids=points.map(([x,y])=>boxes.reduce((best,b,i)=>Math.hypot(b.x-x,b.y-y)<best.d?{i,d:Math.hypot(b.x-x,b.y-y)}:best,{i:-1,d:Infinity}).i);
-        if(ids.every(i=>i>=0)&&new Set(ids).size===3){face=ids.map(i=>({x:boxes[i].x,y:boxes[i].y,ids:[i]}));state();}
-        break;
-      }
+      case 'correct':face=recognize(strokes,m.value)||face;state();break;
     }
   }
 }
@@ -178,3 +240,5 @@ if(location.hostname==='pizarramagica-1xg.pages.dev'){
 }
 
 navigator.serviceWorker?.register('/sw.js').catch(console.error);
+
+
