@@ -71,11 +71,15 @@ export class Room{
         const length=Number(req.headers.get('Content-Length'));
         if(!length||length>420000)return json({error:'Fragmento inválido'},413);
         const input=await req.json();
-        if(typeof input.audio!=='string'||input.audio.length>390000||!input.audio.startsWith('UklGR')||!/^[A-Za-z0-9+/]+=*$/.test(input.audio))return json({error:'Audio inválido'},400);
+        const direct=typeof input.question==='string'?input.question.trim().slice(0,500):'';
+        if(!direct&&(typeof input.audio!=='string'||input.audio.length>390000||!input.audio.startsWith('UklGR')||!/^[A-Za-z0-9+/]+=*$/.test(input.audio)))return json({error:'Audio inválido'},400);
         const budget=await this.env.BUDGET.getByName('daily').fetch('https://internal/budget');
         if(!budget.ok)return json({error:'Límite diario alcanzado'},429);
-        const transcription=await this.env.AI.run('@cf/openai/whisper-large-v3-turbo',{audio:input.audio,language:'es',vad_filter:true,condition_on_previous_text:false});
-        const question=transcription.text?.trim().slice(0,500);
+        let question=direct;
+        if(!question){
+          const transcription=await this.env.AI.run('@cf/openai/whisper-large-v3-turbo',{audio:input.audio,language:'es',vad_filter:true,condition_on_previous_text:false});
+          question=transcription.text?.trim().slice(0,500);
+        }
         if(!question)return json({silent:true});
         const context=Array.isArray(input.context)?input.context.slice(-3).flatMap(turn=>typeof turn?.question==='string'&&typeof turn?.answer==='string'?[{role:'user',content:turn.question.slice(0,500)},{role:'assistant',content:turn.answer.slice(0,700)}]:[]):[];
         const intensity=['suave','normal','alta'].includes(input.intensity)?input.intensity:'normal';
