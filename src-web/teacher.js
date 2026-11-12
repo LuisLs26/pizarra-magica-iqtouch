@@ -1,5 +1,5 @@
 import {connect} from './link.js';
-import {microphone} from './mic.js';
+import {encodeWav,microphone} from './mic.js';
 import {validStrokes} from './face.js';
 const $=id=>document.getElementById(id);
 let session,link,connected=false,peer=false,ready=false,busy=false,speaking=false,capture,pending,blocked=false,enableId=0,cooldown=0,snapshotAction,points=[];
@@ -58,10 +58,10 @@ function preview(strokes){
     if(points.length===3){command('correct',points);canvas.hidden=true;}
   };
 }
-function enqueueAudio(audio){
+function enqueueAudio(clips){
   if(!peer||!ready||blocked)return;
   if(audioQueue.length===2)audioQueue.shift();
-  audioQueue.push({audio,expires:performance.now()+15000});
+  audioQueue.push({clips,expires:performance.now()+15000});
   drainAudio();
 }
 
@@ -79,7 +79,36 @@ async function submit(clip){
   const request=new AbortController();pending=request;controls();
   $('ai').textContent='Whisper está transcribiendo y Gemma está preparando una respuesta…';
   try{
-    const response=await fetch('/api/audio/'+session.id,{method:'POST',signal:request.signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.token},body:JSON.stringify({audio:clip.audio,intensity:$('intensity').value,context:history.filter(t=>t.session===session.id).slice(-3).map(({question,answer})=>({question,answer}))})});
+    const send=(route,input)=>fetch('/api/'+route+'/'+session.id,{
+      method:'POST',signal:request.signal,
+      headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.token},
+      body:JSON.stringify(input)
+    });
+    let input={};
+    if(clip.clips.length===1){
+      input.audio=encodeWav(clip.clips[0]);
+    }else{
+      const parts=clip.parts??=[];
+      while(parts.length<clip.clips.length){
+        const start=parts.length;
+        const batch=await Promise.all(clip.clips.slice(start,start+3).map(async wav=>{
+          const response=await send('transcribe',{audio:encodeWav(wav)});
+          const result=await response.json();
+          if(!response.ok){
+            if(response.status===429&&/cuota|diario/i.test(result.error)){blocked=true;clearAudioQueue();}
+            throw Error(result.error);
+          }
+          return result.question;
+        }));
+        parts.push(...batch);
+      }
+      input.question=parts.filter(Boolean).join(' ');
+      if(!input.question){$('ai').textContent='No se detectaron palabras claras.';return;}
+    }
+    const response=await send('audio',{
+      ...input,intensity:$('intensity').value,
+      context:history.filter(t=>t.session===session.id).slice(-3).map(({question,answer})=>({question,answer}))
+    });
     const m=await response.json();
     if(response.status===409){
       if(!request.signal.aborted&&clip.expires>performance.now()){
@@ -106,9 +135,10 @@ $('mic').onclick=async()=>{
   if(capture){capture.finish();return;}
   const id=++enableId;$('mic').disabled=true;
   try{
-    const recording=await microphone(()=>peer&&ready&&!speaking,audio=>{
+    const recording=await microphone(()=>!speaking,clips=>{
       capture=null;
-      if(audio)enqueueAudio(audio);
+      if(clips.length&&peer&&ready)enqueueAudio(clips);
+      else if(clips.length)ai.textContent='La pizarra está desconectada. Vuelve a vincularla para enviar otra pregunta.';
       else $('ai').textContent='No se detectó voz. Toca para hablar de nuevo.';
       controls();
     },()=>{
