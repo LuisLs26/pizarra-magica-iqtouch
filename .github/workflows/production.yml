@@ -50,6 +50,13 @@ jobs:
             await teacher.waitForFunction(()=>!document.querySelector('#mic').disabled);
             console.log('QR leído, docente vinculado y rostro reconocido.');
             assert.equal(await board.locator('body').innerText(),'');
+            let sentAt, serverTiming;
+            teacher.on('request', req => {
+              if(new URL(req.url()).pathname.startsWith('/api/audio/')) sentAt=Date.now();
+            });
+            teacher.on('response', res => {
+              if(new URL(res.url()).pathname.startsWith('/api/audio/') && res.ok()) serverTiming=res.headers()['server-timing'];
+            });
             await mic.click();
             await teacher.getByText('Micrófono activo.',{exact:true}).waitFor();
             try {
@@ -62,6 +69,7 @@ jobs:
             await teacher.getByRole('button',{name:'Desactivar micrófono'}).click();
             console.log('Captura WAV, Whisper y Gemma completaron un turno real.');
             await teacher.getByText('Voz de la pizarra · Piper',{exact:true}).waitFor({timeout:90000});
+            if(sentAt)console.log('Envío del fragmento a inicio de voz: '+(Date.now()-sentAt)+' ms. '+(serverTiming||'Sin tiempos del servidor'));
             console.log('Piper generó y reprodujo el audio en el navegador de la pizarra.');
             await teacher.getByRole('button',{name:'Borrar rostro'}).click();
             await teacher.waitForFunction(()=>document.querySelector('#mic').disabled);
