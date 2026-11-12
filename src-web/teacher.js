@@ -2,19 +2,19 @@ import {connect} from './link.js';
 import {microphone} from './mic.js';
 import {validStrokes} from './face.js';
 const $=id=>document.getElementById(id);
-let session,link,connected=false,peer=false,ready=false,busy=false,speaking=false,stopMic,pending,blocked=false,enableId=0,cooldown=0,snapshotAction,points=[];
+let session,link,connected=false,peer=false,ready=false,busy=false,speaking=false,capture,pending,blocked=false,enableId=0,cooldown=0,snapshotAction,points=[];
 const audioQueue=[];
 let queueTimer;
 const load=key=>{try{return JSON.parse(localStorage.getItem(key)||'[]');}catch{return [];}};
 let drawings=load('characters'), history=load('history');
 function persist(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true;}catch{$('connection').textContent='Almacenamiento local lleno o no disponible';return false;}}
 function controls(){
-  $('mic').disabled=!stopMic&&(!peer||!ready||blocked);
-  $('mic').textContent=stopMic?'Desactivar micrófono':'Activar micrófono';
+  $('mic').disabled=!capture&&(!peer||!ready||blocked||busy||!!pending||audioQueue.length>0);
+  $('mic').textContent=capture?'Toca para enviar':'Toca para hablar';
   for(const button of document.querySelectorAll('[data-action],#save,#correct,#speech button,#end'))button.disabled=!peer;
 }
 function clearAudioQueue(){clearTimeout(queueTimer);audioQueue.length=0;}
-function halt(){clearAudioQueue();enableId++;stopMic?.();stopMic=null;pending?.abort();pending=null;controls();}
+function halt(){clearAudioQueue();enableId++;capture?.close();capture=null;pending?.abort();pending=null;controls();}
 function command(action,value){if(peer)link.send({type:'command',action,value});}
 function render(){
   $('drawings').replaceChildren(...drawings.map((drawing,index)=>{
@@ -67,7 +67,7 @@ function enqueueAudio(audio){
 
 function drainAudio(){
   clearTimeout(queueTimer);
-  if(!stopMic||!peer||!ready||blocked||pending||busy)return;
+  if(!peer||!ready||blocked||pending||busy)return;
   const wait=cooldown-performance.now();
   if(wait>0){queueTimer=setTimeout(drainAudio,wait);return;}
   while(audioQueue[0]?.expires<=performance.now())audioQueue.shift();
@@ -76,7 +76,7 @@ function drainAudio(){
 }
 
 async function submit(clip){
-  const request=new AbortController();pending=request;
+  const request=new AbortController();pending=request;controls();
   $('ai').textContent='Whisper está transcribiendo y Gemma está preparando una respuesta…';
   try{
     const response=await fetch('/api/audio/'+session.id,{method:'POST',signal:request.signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.token},body:JSON.stringify({audio:clip.audio,intensity:$('intensity').value,context:history.filter(t=>t.session===session.id).slice(-3).map(({question,answer})=>({question,answer}))})});
@@ -100,18 +100,23 @@ async function submit(clip){
     if(!peer||!link.send({type:'reply',answer:m.answer}))throw Error('La pizarra se desconectó antes de recibir la respuesta');
     cooldown=performance.now()+900;
     $('ai').textContent='Whisper y Gemma respondieron correctamente.';
-  }catch(e){if(!request.signal.aborted)$('ai').textContent=e.message;}finally{if(pending===request){pending=null;drainAudio();}}
+  }catch(e){if(!request.signal.aborted)$('ai').textContent=e.message;}finally{if(pending===request){pending=null;drainAudio();controls();}}
 }
 $('mic').onclick=async()=>{
-  if(stopMic){halt();$('ai').textContent='Micrófono apagado.';return;}
+  if(capture){capture.finish();return;}
   const id=++enableId;$('mic').disabled=true;
   try{
-    const stop=await microphone(()=>!speaking,enqueueAudio,()=>{
+    const recording=await microphone(()=>peer&&ready&&!speaking,audio=>{
+      capture=null;
+      if(audio)enqueueAudio(audio);
+      else $('ai').textContent='No se detectó voz. Toca para hablar de nuevo.';
+      controls();
+    },()=>{
       halt();
       $('ai').textContent='El sistema cerró el micrófono. Vuelve a activarlo.';
     });
-    if(id!==enableId){stop();return;}
-    stopMic=stop;$('ai').textContent='Micrófono activo.';
+    if(id!==enableId){recording.close();return;}
+    capture=recording;$('ai').textContent='Micrófono activo.';
   }catch(e){$('ai').textContent='No se pudo activar el micrófono. Revisa los permisos del navegador.';}finally{controls();}
 };
 for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{if(['stop','clear'].includes(b.dataset.action)){clearAudioQueue();pending?.abort();pending=null;}command(b.dataset.action);};
