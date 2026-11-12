@@ -3,6 +3,7 @@ import {recognize,validStrokes,bounds} from './face.js';
 import {connect} from './link.js';
 import {voice} from './voice.js';
 const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
+let pairingTimer, interruption, returning=false;
 let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, disconnected=false;
 const active=new Map();
 const audio=voice();
@@ -58,8 +59,8 @@ async function say(text){
 const offline=['offline-1','offline-2','offline-3'];
 async function announcement(name){if(!face||busy)return;busy=true;state();const turn=++ticket;try{await audio.clip(name,volume);}catch{}finally{if(turn===ticket){busy=false;state();}}}
 function receive(m){
-  if(m.type==='peer'){sessionStorage.setItem('paired','1');if(pairing){pairing.remove();pairing=null;}state();}
-  if(m.type==='end'){stop();link.close();sessionStorage.removeItem('board');sessionStorage.removeItem('paired');start().catch(console.error);}
+  if(m.type==='peer'){clearTimeout(pairingTimer);sessionStorage.setItem('paired','1');if(pairing){pairing.remove();pairing=null;}state();}
+  if(m.type==='end'){if(returning){location.reload();return;} resetPairing();}
   if(m.type==='reply'){last=m.answer;say(last);}
   if(m.type==='command'){
     switch(m.action){
@@ -89,7 +90,7 @@ async function start(){
     session=await r.json();sessionStorage.setItem('board',JSON.stringify(session));
   }
   if(!sessionStorage.getItem('paired')){
-  setTimeout(()=>{if(pairing&&link){pairing.remove();pairing=null;link.close();start().catch(console.error);}},Math.max(0,session.inviteUntil-Date.now()));
+  pairingTimer=setTimeout(resetPairing,Math.max(0,session.inviteUntil-Date.now()));
   pairing=document.createElement('aside');
   const url=new URL('/teacher',location.origin);url.hash=session.id+'.'+session.invite;
   pairing.innerHTML='<h1>Vincular celular</h1><canvas aria-label="Código QR"></canvas><p>Toca aquí para activar el audio y la pantalla completa.</p>';
@@ -97,7 +98,7 @@ async function start(){
   pairing.onclick=()=>{audio.unlock();document.documentElement.requestFullscreen?.().catch(()=>{});};
   await QRCode.toCanvas(pairing.querySelector('canvas'),url.href,{width:250});
   }
-  let interruption;
+
   link=connect(session.id,session.token,receive,online=>{
     clearTimeout(interruption);
     if(online){state();if(disconnected){disconnected=false;announcement('online');}}
@@ -115,15 +116,41 @@ function begin(){
     document.body.append(pairing);
   });
 }
+function resetPairing(){
+  clearTimeout(pairingTimer);
+  link?.close();
+  clearTimeout(interruption);
+  link=null;
+  pairing?.remove();
+  pairing=null;
+  stop();
+  sessionStorage.removeItem('board');
+  sessionStorage.removeItem('paired');
+  begin();
+}
+function returnToPairing(){
+  if(returning)return;
+  returning=true;
+  if(!link?.send({type:'end'})){returning=false;resetPairing();return;}
+  sessionStorage.removeItem('board');
+  sessionStorage.removeItem('paired');
+  setTimeout(()=>location.reload(),1200);
+}
 if(location.hostname==='pizarramagica-1xg.pages.dev'){
   location.replace('https://pizarra-magica-iqtouch.luisnurenagonzales.workers.dev/');
 }else{
+  const home=document.createElement('button');
+  home.type='button';
+  home.setAttribute('aria-label','Volver al código QR');
+  home.title='Volver al código QR';
+  home.innerHTML='<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 21v-7h6v7"/></svg>';
+  home.style.cssText='position:fixed;right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));z-index:2;display:grid;place-items:center;width:48px;height:48px;border:1px solid #dce7ee;border-radius:14px;background:#fffdf6;color:#25394c;cursor:pointer;touch-action:manipulation';
+  home.onclick=returnToPairing;
+  document.body.append(home);
   addEventListener('keydown',event=>{
     if(event.key.toLowerCase()!=='q'||!event.altKey||!event.shiftKey||event.repeat)return;
     event.preventDefault();
-    sessionStorage.removeItem('board');
-    sessionStorage.removeItem('paired');
-    location.reload();
+    returnToPairing();
   });
   begin();
 }
