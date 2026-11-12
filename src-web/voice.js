@@ -28,7 +28,10 @@ export function voice(){
       if(context?.state!=='running')throw Error('Audio bloqueado');
       model??=import('@mintplex-labs/piper-tts-web');
       const piper=await model;
-      const blob=await piper.predict({text,voiceId:'es_ES-davefx-medium'});
+      let timeout;
+      const prediction=piper.predict({text,voiceId:'es_ES-davefx-medium'});
+      const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Piper tardó en cargar')),18000);});
+      const blob=await Promise.race([prediction,deadline]).finally(()=>clearTimeout(timeout));
       if(id!==serial)return;
       const decoded=await context.decodeAudioData(await blob.arrayBuffer());
       if(id!==serial)return;
@@ -48,4 +51,5 @@ export function voice(){
     }
   }};
 }
+
 
