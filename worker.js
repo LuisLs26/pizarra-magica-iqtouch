@@ -98,13 +98,14 @@ export class Room{
     if(!m||typeof m!=='object')return;
     const [role]=this.ctx.getTags(socket);
     if(m.type==='ping'){socket.send('{"type":"pong"}');return;}
+    if(m.type==='end'){await this.alarm();return;}
     if(role==='board'){
       if(m.type==='state'){const state={type:'state',ready:m.ready===true,busy:m.busy===true};socket.serializeAttachment(state);this.send('teacher',state);}
       if(m.type==='snapshot'&&validStrokes(m.strokes))this.send('teacher',{type:'snapshot',strokes:m.strokes});
       if(m.type==='provider'&&['Piper','Voz del navegador','audio no disponible'].includes(m.provider))this.send('teacher',m);
       return;
     }
-    if(m.type==='end'){await this.alarm();return;}
+
     if(m.type==='reply'&&typeof m.answer==='string'&&m.answer.length<=1100)this.send('board',{type:'reply',answer:m.answer});
     if(m.type!=='command')return;
     const v=m.value;
@@ -116,7 +117,7 @@ export class Room{
       m.action==='correct'&&Array.isArray(v)&&v.length===3&&validStrokes([v]);
     if(valid)this.send('board',{type:'command',action:m.action,value:v});
   }
-  webSocketClose(socket){const [role]=this.ctx.getTags(socket);this.send(role==='board'?'teacher':'board',{type:'peer-left'});}
+  webSocketClose(socket){const [role]=this.ctx.getTags(socket);if(!this.sockets(role).some(peer=>peer!==socket&&peer.readyState===WebSocket.OPEN))this.send(role==='board'?'teacher':'board',{type:'peer-left'});}
   async alarm(){
     await this.ctx.storage.deleteAll();await this.ctx.storage.deleteAlarm();
     for(const socket of this.ctx.getWebSockets()){try{socket.send('{"type":"end"}');socket.close(1000,'Sesión terminada');}catch{}}
