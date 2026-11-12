@@ -2,7 +2,7 @@ name: Prueba en producción
 on:
   workflow_dispatch:
   push:
-    paths: ['.github/workflows/production.yml', 'worker.js', 'src-web/**']
+    paths: ['.github/workflows/production.yml', 'worker.js', 'vite.config.js', 'src-web/**']
     branches: [main]
 permissions:
   contents: read
