@@ -84,6 +84,7 @@ function receive(m){
 async function start(){
   let session=JSON.parse(sessionStorage.getItem('board')||'null');
   if(!session||session.expires<Date.now()||(!sessionStorage.getItem('paired')&&session.inviteUntil<Date.now())){
+    sessionStorage.removeItem('paired');
     const r=await fetch('/api/session',{method:'POST'});if(!r.ok)throw Error('No se pudo crear una sesión');
     session=await r.json();sessionStorage.setItem('board',JSON.stringify(session));
   }
@@ -103,7 +104,30 @@ async function start(){
     else interruption=setTimeout(()=>{if(!disconnected){disconnected=true;stop();announcement(offline[Math.floor(Math.random()*offline.length)]);}},3500);
   });
 }
-start().catch(console.error);
+function begin(){
+  start().catch(error=>{
+    console.error(error);
+    if(sessionStorage.getItem('paired'))return;
+    pairing?.remove();
+    pairing=document.createElement('aside');
+    pairing.textContent='No se pudo generar el QR. Toca para reintentar.';
+    pairing.onclick=()=>{pairing.remove();pairing=null;begin();};
+    document.body.append(pairing);
+  });
+}
+if(location.hostname==='pizarramagica-1xg.pages.dev'){
+  location.replace('https://pizarra-magica-iqtouch.luisnurenagonzales.workers.dev/');
+}else{
+  addEventListener('keydown',event=>{
+    if(event.key.toLowerCase()!=='q'||!event.altKey||!event.shiftKey||event.repeat)return;
+    event.preventDefault();
+    sessionStorage.removeItem('board');
+    sessionStorage.removeItem('paired');
+    location.reload();
+  });
+  begin();
+}
+
 navigator.serviceWorker?.register('/sw.js').catch(console.error);
 
 
