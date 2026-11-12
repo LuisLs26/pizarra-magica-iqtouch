@@ -28,6 +28,8 @@ jobs:
           const browser = await chromium.launch({args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--use-file-for-fake-audio-capture=/tmp/pizarra-test.wav','--autoplay-policy=no-user-gesture-required']});
           try {
             const board = await browser.newPage({viewport:{width:900,height:640}});
+            board.on('console', message => { if (message.type()==='warning'||message.type()==='error') console.log('Pizarra:',message.text()); });
+            board.on('pageerror', error => console.log('Pizarra:',error.message));
             await board.goto(base);
             const qr = board.locator('aside canvas');
             await qr.waitFor();
