@@ -32,6 +32,7 @@ export function voice(){
       source.connect(analyser);source.onended=()=>{source=null;resolve=null;done();};source.start();onStart?.();
     });
   }
+  prepare();
   return {unlock,stop,volume(v){if(gain)gain.gain.value=v;},level(){
     if(source){analyser.getByteTimeDomainData(samples);return Math.min(1,Math.sqrt(samples.reduce((s,n)=>s+((n-128)/128)**2,0)/samples.length)*5);}
     browserLevel+=((performance.now()<target?.until?target.amount:0)-browserLevel)*.19;return browserLevel;
