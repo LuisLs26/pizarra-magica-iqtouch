@@ -44,7 +44,17 @@ function frame(t){
 }
 requestAnimationFrame(frame);
 function stop(){ticket++;audio.stop();busy=false;state();}
-async function say(text){if(!face||!text)return;stop();const turn=ticket;busy=true;state();try{const provider=await audio.speak(text,volume);if(turn===ticket&&provider)link?.send({type:'provider',provider});}catch{link?.send({type:'provider',provider:'audio no disponible'});}finally{if(turn===ticket){busy=false;state();}}}
+async function say(text){
+  if(!face||!text)return;
+  stop();
+  const turn=ticket;
+  busy=true;
+  state();
+  const report=provider=>{if(turn===ticket)link?.send({type:'provider',provider});};
+  try{await audio.speak(text,volume,report);}
+  catch(error){console.warn('Reproducción:',error.message);report('audio no disponible');}
+  finally{if(turn===ticket){busy=false;state();}}
+}
 const offline=['offline-1','offline-2','offline-3'];
 async function announcement(name){if(!face||busy)return;busy=true;state();const turn=++ticket;try{await audio.clip(name,volume);}catch{}finally{if(turn===ticket){busy=false;state();}}}
 function receive(m){

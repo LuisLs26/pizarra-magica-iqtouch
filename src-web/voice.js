@@ -11,41 +11,43 @@ export function voice(){
     if(utterance){utterance.onend=utterance.onerror=null;speechSynthesis.cancel();utterance=null;}
     target=0;resolve?.();resolve=null;
   }
-  function play(buffer,volume,rate){
+  function play(buffer,volume,rate,onStart){
     return new Promise((done,reject)=>{
       if(context?.state!=='running'){reject(Error('Audio bloqueado'));return;}
       resolve=done;gain.gain.value=volume;source=context.createBufferSource();source.buffer=buffer;source.playbackRate.value=rate;
-      source.connect(analyser);source.onended=()=>{source=null;resolve=null;done();};source.start();
+      source.connect(analyser);source.onended=()=>{source=null;resolve=null;done();};source.start();onStart?.();
     });
   }
   return {unlock,stop,volume(v){if(gain)gain.gain.value=v;},level(){
     if(source){analyser.getByteTimeDomainData(samples);return Math.min(1,Math.sqrt(samples.reduce((s,n)=>s+((n-128)/128)**2,0)/samples.length)*5);}
     browserLevel+=((performance.now()<target?.until?target.amount:0)-browserLevel)*.19;return browserLevel;
   },async clip(name,volume){const id=serial;const data=await fetch('/audio/'+name+'.wav').then(r=>{if(!r.ok)throw Error('Audio');return r.arrayBuffer();});if(!context||id!==serial)return;const decoded=await context.decodeAudioData(data);if(id===serial)await play(decoded,volume,1);},
-  async speak(text,volume){
+  async speak(text,volume,onStart){
     const id=serial;
     try{
       if(context?.state!=='running')throw Error('Audio bloqueado');
       model??=import('@mintplex-labs/piper-tts-web');
-      const piper=await model;
       let timeout;
-      const prediction=piper.predict({text,voiceId:'es_ES-davefx-medium'});
+      const prediction=model.then(piper=>piper.predict({text,voiceId:'es_ES-davefx-medium'}));
       const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Piper tardó en cargar')),18000);});
       const blob=await Promise.race([prediction,deadline]).finally(()=>clearTimeout(timeout));
       if(id!==serial)return;
       const decoded=await context.decodeAudioData(await blob.arrayBuffer());
       if(id!==serial)return;
-      await play(decoded,volume,1.13);return 'Piper';
-    }catch{
+      await play(decoded,volume,1.13,()=>onStart('Piper'));return;
+    }catch(error){
       if(id!==serial)return;
+      console.warn('Piper:',error.message);
       if(!globalThis.speechSynthesis)throw Error('Sin síntesis disponible');
       await new Promise((done,reject)=>{
-        resolve=done;utterance=new SpeechSynthesisUtterance(text);utterance.lang='es-PE';
+        const watchdog=setTimeout(()=>{resolve=null;stop();reject(Error('La voz del navegador no se inició'));},8000);
+        resolve=()=>{clearTimeout(watchdog);done();};utterance=new SpeechSynthesisUtterance(text);utterance.lang='es-PE';
         utterance.voice=speechSynthesis.getVoices().find(v=>v.localService&&v.lang.startsWith('es'))||null;
         utterance.pitch=1.3;utterance.rate=1.1;utterance.volume=volume;
+        utterance.onstart=()=>{clearTimeout(watchdog);onStart('Voz del navegador');};
         utterance.onboundary=e=>{target={until:performance.now()+Math.min(400,120+(e.charLength||1)*27),amount:.35};};
-        utterance.onend=()=>{resolve=null;utterance=null;done();};
-        utterance.onerror=()=>{resolve=null;utterance=null;reject(Error('Síntesis del navegador'));};
+        utterance.onend=()=>{clearTimeout(watchdog);resolve=null;utterance=null;done();};
+        utterance.onerror=()=>{clearTimeout(watchdog);resolve=null;utterance=null;reject(Error('Síntesis del navegador'));};
         speechSynthesis.speak(utterance);
       });return 'Voz del navegador';
     }
