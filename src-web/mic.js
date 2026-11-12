@@ -12,7 +12,7 @@ export function encodeWav(bytes){
   for(let i=0;i<bytes.length;i+=8192)str+=String.fromCharCode(...bytes.subarray(i,i+8192));
   return btoa(str);
 }
-export async function microphone(allowed,submit,ended){
+export async function microphone(allowed,ended){
   const ctx=new AudioContext();
   let stream;
   try{
@@ -45,7 +45,7 @@ export async function microphone(allowed,submit,ended){
       if(closed)return;
       close();
       saveClip();
-      submit(clips);
+      return clips;
     }
     node.port.onmessage=({data})=>{
       if(!allowed()){saveClip();return;}

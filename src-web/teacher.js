@@ -81,7 +81,7 @@ async function submit(clip){
   try{
     const send=(route,input)=>fetch('/api/'+route+'/'+session.id,{
       method:'POST',signal:request.signal,
-      headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.token},
+      headers:{'Content-Type':'application/json','X-Pizarra-Send':'manual',Authorization:'Bearer '+session.token},
       body:JSON.stringify(input)
     });
     let input={};
@@ -132,16 +132,18 @@ async function submit(clip){
   }catch(e){if(!request.signal.aborted)$('ai').textContent=e.message;}finally{if(pending===request){pending=null;drainAudio();controls();}}
 }
 $('mic').onclick=async()=>{
-  if(capture){capture.finish();return;}
+  if(capture){
+    const clips=capture.finish();
+    capture=null;
+    if(clips?.length&&peer&&ready)enqueueAudio(clips);
+    else if(clips?.length)$('ai').textContent='La pizarra está desconectada. Vuelve a vincularla para enviar otra pregunta.';
+    else $('ai').textContent='No se detectó voz. Toca para hablar de nuevo.';
+    controls();
+    return;
+  }
   const id=++enableId;$('mic').disabled=true;
   try{
-    const recording=await microphone(()=>!speaking,clips=>{
-      capture=null;
-      if(clips.length&&peer&&ready)enqueueAudio(clips);
-      else if(clips.length)ai.textContent='La pizarra está desconectada. Vuelve a vincularla para enviar otra pregunta.';
-      else $('ai').textContent='No se detectó voz. Toca para hablar de nuevo.';
-      controls();
-    },()=>{
+    const recording=await microphone(()=>!speaking,()=>{
       halt();
       $('ai').textContent='El sistema cerró el micrófono. Vuelve a activarlo.';
     });
