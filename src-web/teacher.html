@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Control docente · Pizarra Mágica</title><link rel="stylesheet" href="/teacher.css"></head>
+<body><main>
+<header><h1>Pizarra Mágica</h1><p id="connection" role="status">Buscando la pizarra…</p></header>
+<section><h2>Micrófono</h2><p>Mantén este panel en primer plano y el teléfono desbloqueado durante la escucha.</p><button id="mic" disabled>Activar micrófono</button><p id="ai" role="status"></p><p id="voice" role="status"></p></section>
+<section><h2>Personaje</h2><div class="row"><button data-action="clear">Borrar rostro</button><button data-action="stop">Detener voz</button><button data-action="repeat">Repetir</button></div>
+<label>Expresión<select id="emotion"><option>Alegría</option><option>Sorpresa</option><option>Confusión</option><option>Curiosidad</option><option>Risa</option><option>Tristeza</option><option>Pensamiento</option><option>Entusiasmo</option></select></label>
+<label>Personalidad<select id="intensity"><option value="normal">Normal</option><option value="suave">Suave</option><option value="alta">Muy bromista</option></select></label>
+<label>Volumen<input id="volume" type="range" min="0" max="1" value=".8" step=".05"></label>
+<form id="speech"><label>Texto para decir<textarea id="words" maxlength="800" required></textarea></label><button>Hablar en la pizarra</button></form>
+</section>
+<section><h2>Dibujos guardados</h2><div class="row"><button id="save">Guardar rostro</button><button id="correct">Corregir rostro</button></div><p id="correction" role="status"></p><canvas id="preview" width="640" height="360" hidden></canvas><ul id="drawings"></ul><label>Importar personaje<input id="import" type="file" accept="application/json,.json"></label></section>
+<section><h2>Historial local</h2><ul id="history"></ul><button id="erase">Eliminar historial</button></section>
+<button id="end">Cerrar sesión</button>
+</main><script type="module" src="/teacher.js"></script></body></html>
