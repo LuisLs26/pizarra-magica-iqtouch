@@ -46,7 +46,7 @@ jobs:
               for (const [x,y] of line.slice(1)) await board.mouse.move(x,y,{steps:6});
               await board.mouse.up();
             }
-            const mic=teacher.getByRole('button',{name:'Activar micrófono'});
+            const mic=teacher.getByRole('button',{name:'Toca para hablar'});
             await teacher.waitForFunction(()=>!document.querySelector('#mic').disabled);
             console.log('QR leído, docente vinculado y rostro reconocido.');
             assert.equal(await board.locator('body').innerText(),'');
@@ -66,7 +66,7 @@ jobs:
               throw error;
             }
             assert.ok((await teacher.locator('#history li').first().innerText()).includes('→'));
-            await teacher.getByRole('button',{name:'Desactivar micrófono'}).click();
+            assert.equal(await teacher.getByRole('button',{name:'Toca para enviar'}).count(),0);
             console.log('Captura WAV, Whisper y Gemma completaron un turno real.');
             await teacher.getByText('Voz de la pizarra · Piper',{exact:true}).waitFor({timeout:90000});
             if(sentAt)console.log('Envío del fragmento a inicio de voz: '+(Date.now()-sentAt)+' ms. '+(serverTiming||'Sin tiempos del servidor'));
