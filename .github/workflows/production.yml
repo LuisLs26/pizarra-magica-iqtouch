@@ -1,0 +1,67 @@
+name: Prueba en producción
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.github/workflows/production.yml']
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-save playwright jsqr
+      - run: npx playwright install --with-deps chromium
+      - run: ffmpeg -hide_banner -loglevel error -i src-web/public/audio/offline-1.wav -af 'adelay=1600,apad=pad_dur=3' -ar 48000 -ac 1 /tmp/pizarra-test.wav
+      - run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {chromium} from 'playwright';
+          import jsQR from 'jsqr';
+          const base = 'https://pizarra-magica-iqtouch.luisnurenagonzales.workers.dev';
+          const browser = await chromium.launch({args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--use-file-for-fake-audio-capture=/tmp/pizarra-test.wav','--autoplay-policy=no-user-gesture-required']});
+          try {
+            const board = await browser.newPage({viewport:{width:900,height:640}});
+            await board.goto(base);
+            const qr = board.locator('aside canvas');
+            await qr.waitFor();
+            const decoded = await qr.evaluate(canvas => ({width:canvas.width,height:canvas.height,data:Array.from(canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data)}));
+            const invitation = jsQR(new Uint8ClampedArray(decoded.data),decoded.width,decoded.height)?.data;
+            assert.ok(invitation?.startsWith(base+'/teacher'));
+            await board.getByRole('heading',{name:'Vincular celular'}).click();
+            const teacher = await browser.newPage({viewport:{width:390,height:844},permissions:['microphone']});
+            await teacher.goto(invitation);
+            await teacher.getByText('Pizarra conectada',{exact:true}).waitFor();
+            await qr.waitFor({state:'detached'});
+            for (const line of [[[230,180],[245,165],[275,171],[280,200],[238,206],[230,180]],[[590,181],[615,164],[642,177],[644,203],[595,205],[590,181]],[[325,334],[385,370],[465,371],[535,336]]]) {
+              await board.mouse.move(...line[0]); await board.mouse.down();
+              for (const [x,y] of line.slice(1)) await board.mouse.move(x,y,{steps:6});
+              await board.mouse.up();
+            }
+            const mic=teacher.getByRole('button',{name:'Activar micrófono'});
+            await teacher.waitForFunction(()=>!document.querySelector('#mic').disabled);
+            console.log('QR leído, docente vinculado y rostro reconocido.');
+            assert.equal(await board.locator('body').innerText(),'');
+            await mic.click();
+            await teacher.getByText('Micrófono activo.',{exact:true}).waitFor();
+            try {
+              await teacher.getByText('Whisper y Gemma respondieron correctamente.',{exact:true}).waitFor({timeout:50000});
+            } catch (error) {
+              console.error('Estado IA:',await teacher.locator('#ai').innerText());
+              throw error;
+            }
+            assert.ok((await teacher.locator('#history li').first().innerText()).includes('→'));
+            await teacher.getByRole('button',{name:'Desactivar micrófono'}).click();
+            console.log('Captura WAV, Whisper y Gemma completaron un turno real.');
+            await teacher.getByText('Voz de la pizarra · Piper',{exact:true}).waitFor({timeout:90000});
+            console.log('Piper generó y reprodujo el audio en el navegador de la pizarra.');
+            await teacher.getByRole('button',{name:'Borrar rostro'}).click();
+            await teacher.waitForFunction(()=>document.querySelector('#mic').disabled);
+            await teacher.getByRole('button',{name:'Cerrar sesión'}).click();
+          } finally { await browser.close(); }
+          JS
