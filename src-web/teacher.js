@@ -2,7 +2,9 @@ import {connect} from './link.js';
 import {microphone} from './mic.js';
 import {validStrokes} from './face.js';
 const $=id=>document.getElementById(id);
-let session,link,connected=false,peer=false,ready=false,busy=false,stopMic,pending,blocked=false,enableId=0,cooldown=0,snapshotAction,points=[];
+let session,link,connected=false,peer=false,ready=false,busy=false,speaking=false,stopMic,pending,blocked=false,enableId=0,cooldown=0,snapshotAction,points=[];
+const audioQueue=[];
+let queueTimer;
 const load=key=>{try{return JSON.parse(localStorage.getItem(key)||'[]');}catch{return [];}};
 let drawings=load('characters'), history=load('history');
 function persist(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true;}catch{$('connection').textContent='Almacenamiento local lleno o no disponible';return false;}}
@@ -11,7 +13,8 @@ function controls(){
   $('mic').textContent=stopMic?'Desactivar micrófono':'Activar micrófono';
   for(const button of document.querySelectorAll('[data-action],#save,#correct,#speech button,#end'))button.disabled=!peer;
 }
-function halt(){enableId++;stopMic?.();stopMic=null;pending?.abort();pending=null;controls();}
+function clearAudioQueue(){clearTimeout(queueTimer);audioQueue.length=0;}
+function halt(){clearAudioQueue();enableId++;stopMic?.();stopMic=null;pending?.abort();pending=null;controls();}
 function command(action,value){if(peer)link.send({type:'command',action,value});}
 function render(){
   $('drawings').replaceChildren(...drawings.map((drawing,index)=>{
@@ -30,10 +33,10 @@ function render(){
 }
 function receive(m){
   if(m.type==='peer'){peer=true;$('connection').textContent='Pizarra conectada';}
-  if(m.type==='peer-left'){peer=false;ready=false;$('connection').textContent='Pizarra desconectada. Esperando reconexión…';}
-  if(m.type==='state'){ready=m.ready;if(busy&&!m.busy)cooldown=performance.now()+450;busy=m.busy;}
-  if(m.type==='provider')$('voice').textContent='Voz de la pizarra · '+m.provider;
-  if(m.type==='end'){halt();link.close();peer=false;ready=false;sessionStorage.removeItem('teacher');$('connection').textContent='Sesión finalizada. Escanea un nuevo QR.';}
+  if(m.type==='peer-left'){peer=false;ready=false;busy=false;speaking=false;$('connection').textContent='Pizarra desconectada. Esperando reconexión…';}
+  if(m.type==='state'){ready=m.ready;if(busy&&!m.busy){cooldown=performance.now()+250;speaking=false;}busy=m.busy;drainAudio();}
+  if(m.type==='provider'){speaking=m.provider!=='audio no disponible';$('voice').textContent='Voz de la pizarra · '+m.provider;}
+  if(m.type==='end'){halt();link.close();peer=false;ready=false;busy=false;speaking=false;sessionStorage.removeItem('teacher');$('connection').textContent='Sesión finalizada. Escanea un nuevo QR.';}
   if(m.type==='snapshot'&&snapshotAction){
     const action=snapshotAction;snapshotAction=null;
     if(action==='save'&&m.strokes.length){
@@ -55,53 +58,39 @@ function preview(strokes){
     if(points.length===3){command('correct',points);canvas.hidden=true;}
   };
 }
-const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-const engine=document.createElement('select');
-engine.setAttribute('aria-label','Motor de transcripción');
-engine.add(new Option('Whisper','whisper'));
-if(Recognition){
-  engine.add(new Option('Reconocimiento rápido del navegador (Google en Chrome)','browser'));
-  const googleChrome=navigator.userAgentData?.brands?.some(({brand})=>brand==='Google Chrome')
-    ??(/\bChrome\//.test(navigator.userAgent)&&!/Edg|OPR|SamsungBrowser/.test(navigator.userAgent));
-  if(googleChrome)engine.value='browser';
-}
-const engineLabel=document.createElement('label');
-engineLabel.append('Transcripción ',engine);
-$('mic').before(engineLabel);
-engine.onchange=()=>{if(stopMic)halt();};
-
-function browserMicrophone(allowed,onError){
-  const recognition=new Recognition();
-  recognition.lang='es-PE';
-  recognition.continuous=true;
-  let stopped=false;
-  recognition.onresult=event=>{
-    if(!allowed())return;
-    const phrases=[];
-    for(let i=event.resultIndex;i<event.results.length;i++){
-      if(event.results[i].isFinal)phrases.push(event.results[i][0].transcript);
-    }
-    const question=phrases.join(' ').trim();
-    if(question)submit({question});
-  };
-  recognition.onerror=event=>{
-    if(!stopped&&event.error!=='no-speech')onError();
-  };
-  recognition.onend=()=>{
-    if(!stopped)try{recognition.start();}catch{onError();}
-  };
-  recognition.start();
-  return ()=>{stopped=true;recognition.abort();};
+function enqueueAudio(audio){
+  if(!peer||!ready||blocked)return;
+  if(audioQueue.length===2)audioQueue.shift();
+  audioQueue.push({audio,expires:performance.now()+15000});
+  drainAudio();
 }
 
-async function submit(input){
+function drainAudio(){
+  clearTimeout(queueTimer);
+  if(!stopMic||!peer||!ready||blocked||pending||busy)return;
+  const wait=cooldown-performance.now();
+  if(wait>0){queueTimer=setTimeout(drainAudio,wait);return;}
+  while(audioQueue[0]?.expires<=performance.now())audioQueue.shift();
+  const clip=audioQueue.shift();
+  if(clip)submit(clip);
+}
+
+async function submit(clip){
   const request=new AbortController();pending=request;
   $('ai').textContent='Whisper está transcribiendo y Gemma está preparando una respuesta…';
   try{
-    const response=await fetch('/api/audio/'+session.id,{method:'POST',signal:request.signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.token},body:JSON.stringify({...input,intensity:$('intensity').value,context:history.filter(t=>t.session===session.id).slice(-3).map(({question,answer})=>({question,answer}))})});
+    const response=await fetch('/api/audio/'+session.id,{method:'POST',signal:request.signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.token},body:JSON.stringify({audio:clip.audio,intensity:$('intensity').value,context:history.filter(t=>t.session===session.id).slice(-3).map(({question,answer})=>({question,answer}))})});
     const m=await response.json();
+    if(response.status===409){
+      if(!request.signal.aborted&&clip.expires>performance.now()){
+        if(audioQueue.length===2)audioQueue.pop();
+        audioQueue.unshift(clip);
+        cooldown=performance.now()+250;
+      }
+      return;
+    }
     if(!response.ok){
-      if(response.status===429&&/cuota|diario/i.test(m.error)){blocked=true;halt();}
+      if(response.status===429&&/cuota|diario/i.test(m.error)){blocked=true;clearAudioQueue();}
       throw Error(m.error);
     }
     if(request.signal.aborted)return;
@@ -110,23 +99,22 @@ async function submit(input){
     if(persist('history',next)){history=next;render();}
     if(!peer||!link.send({type:'reply',answer:m.answer}))throw Error('La pizarra se desconectó antes de recibir la respuesta');
     cooldown=performance.now()+900;
-    $('ai').textContent=input.question?'Gemma respondió correctamente.':'Whisper y Gemma respondieron correctamente.';
-  }catch(e){if(!request.signal.aborted)$('ai').textContent=e.message;}finally{if(pending===request)pending=null;}
+    $('ai').textContent='Whisper y Gemma respondieron correctamente.';
+  }catch(e){if(!request.signal.aborted)$('ai').textContent=e.message;}finally{if(pending===request){pending=null;drainAudio();}}
 }
 $('mic').onclick=async()=>{
   if(stopMic){halt();$('ai').textContent='Micrófono apagado.';return;}
   const id=++enableId;$('mic').disabled=true;
   try{
-    const allowed=()=>peer&&ready&&!busy&&!pending&&!document.hidden&&performance.now()>cooldown;
-    const stop=engine.value==='browser'
-      ?browserMicrophone(allowed,()=>{halt();engine.value='whisper';$('ai').textContent='El reconocimiento del navegador falló. Activa el micrófono para usar Whisper.';})
-      :await microphone(allowed,audio=>submit({audio}),()=>{halt();$('ai').textContent='El sistema cerró el micrófono. Vuelve a activarlo.';});
+    const stop=await microphone(()=>!speaking,enqueueAudio,()=>{
+      halt();
+      $('ai').textContent='El sistema cerró el micrófono. Vuelve a activarlo.';
+    });
     if(id!==enableId){stop();return;}
     stopMic=stop;$('ai').textContent='Micrófono activo.';
   }catch(e){$('ai').textContent='No se pudo activar el micrófono. Revisa los permisos del navegador.';}finally{controls();}
 };
-document.addEventListener('visibilitychange',()=>{if(document.hidden){halt();$('ai').textContent='Micrófono pausado. Actívalo al volver al panel.';}});
-for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{if(['stop','clear'].includes(b.dataset.action)){pending?.abort();pending=null;}command(b.dataset.action);};
+for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{if(['stop','clear'].includes(b.dataset.action)){clearAudioQueue();pending?.abort();pending=null;}command(b.dataset.action);};
 $('emotion').onchange=e=>command('emotion',e.target.value.toLowerCase());
 $('volume').oninput=e=>command('volume',Number(e.target.value));
 $('speech').onsubmit=e=>{e.preventDefault();command('say',$('words').value.trim());};
@@ -154,7 +142,7 @@ async function start(){
   if(!session||session.expires<Date.now())throw Error('Escanea el QR que aparece en la pizarra.');
   link=connect(session.id,session.token,receive,online=>{
     connected=online;
-    if(!online){peer=false;ready=false;pending?.abort();}
+    if(!online){peer=false;ready=false;busy=false;speaking=false;pending?.abort();}
     $('connection').textContent=connected?'Esperando a la pizarra…':'Reconectando…';controls();
   });
 }
