@@ -17,6 +17,7 @@ jobs:
           node-version: 22
       - run: npm install --no-save playwright jsqr
       - run: npx playwright install --with-deps chromium
+      - run: sudo apt-get install -y ffmpeg
       - run: ffmpeg -hide_banner -loglevel error -i src-web/public/audio/offline-1.wav -af 'adelay=1600,apad=pad_dur=3' -ar 48000 -ac 1 /tmp/pizarra-test.wav
       - run: |
           node --input-type=module <<'JS'
