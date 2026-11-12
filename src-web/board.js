@@ -4,7 +4,7 @@ import {connect} from './link.js';
 import {voice} from './voice.js';
 const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
 let pairingTimer, interruption, returning=false;
-let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, disconnected=false;
+let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
 const active=new Map();
 const audio=voice();
 function loadBoard(){try{const lines=JSON.parse(localStorage.getItem('board-drawing'));return validStrokes(lines)?lines:[];}catch{return [];}}
@@ -23,22 +23,44 @@ canvas.onpointermove=e=>{const line=active.get(e.pointerId);if(!line)return;for(
 function finish(e){if(!active.delete(e.pointerId)||active.size)return;timer=setTimeout(()=>{face=recognize(strokes);saveBoard();state();},1500);}
 canvas.onpointerup=canvas.onpointercancel=canvas.onlostpointercapture=finish;
 function state(){link?.send({type:'state',ready:!!face,busy});}
+const moods={alegría:[1,1],sorpresa:[1.35,1.5],confusión:[.8,.9],curiosidad:[1.15,1],risa:[.65,1.6],tristeza:[.8,.65],pensamiento:[.9,.8],entusiasmo:[1.25,1.3]};
 function frame(t){
-  if(t>nextBlink){blinkStart=t;nextBlink=t+1900+Math.random()*5000;}
-  const blink=Math.max(0,1-Math.abs(t-blinkStart-85)/85);
-  const mouth=audio.level(), look=Math.sin(t/1050)*Math.cos(t/3600);
-  const mood={alegría:[1,1],sorpresa:[1.35,1.5],confusión:[.8,.9],curiosidad:[1.15,1],risa:[.65,1.6],tristeza:[.8,.65],pensamiento:[.9,.8],entusiasmo:[1.25,1.3]}[expression]||[1,1];
+  if(t>nextBlink){
+    blinkStart=t;
+    doubleBlink=Math.random()<.24;
+    nextBlink=t+(busy?1200:1900)+Math.random()*2800;
+  }
+  const blinkWave=offset=>Math.max(0,1-Math.abs(t-blinkStart-offset-75)/75);
+  const blink=Math.max(blinkWave(0),doubleBlink?blinkWave(205):0);
+  const voiceLevel=audio.level();
+  const speech=Math.min(1,voiceLevel*3);
+  const gaze=Math.tanh(Math.sin(t/1030)*2)*.7+Math.sin(t/473)*.13;
+  const gazeUp=Math.sin(t/1570)*.45;
+  const glance=Math.sin(t/315)*speech*.22;
+  const breath=Math.sin(t/620)*.5+Math.sin(t/1380)*.5;
+  const smile=Math.pow(Math.max(0,Math.sin(t/1160)*Math.cos(t/1830)),3);
+  const mood=moods[expression]||moods.alegría;
   ctx.clearRect(0,0,width,height);
   ctx.strokeStyle='#171819';ctx.lineWidth=Math.max(3,Math.min(width,height)*.008);ctx.lineCap=ctx.lineJoin='round';
   strokes.forEach((line,i)=>{
     const group=face?.findIndex(g=>g.ids.includes(i))??-1, anchor=face?.[group], pupil=group>=0&&group<2&&anchor.ids[0]!==i;
     ctx.beginPath();
     line.forEach(([x,y],j)=>{
-      if(anchor&&group<2){x+=look*(pupil?.008:.002);y=anchor.y+(y-anchor.y)*Math.max(.07,mood[0]*(1-blink*.94));}
-      if(group===2){const bend=Math.max(0,1-Math.abs(x-anchor.x)/.13);y=anchor.y+(y-anchor.y)*(mood[1]+mouth*2)+mouth*bend*.024+(expression==='tristeza'?-.006:0)*bend;}
+      if(anchor&&group<2){
+        const open=Math.max(.06,(mood[0]+breath*.09+speech*.22)*(1-blink*.96));
+        x+=(gaze+glance)*(pupil?.013:.003);
+        y=anchor.y+(y-anchor.y+(pupil?gazeUp*.011:0))*open+gazeUp*.003;
+      }
+      if(group===2){
+        const center=Math.max(0,1-Math.abs(x-anchor.x)/.13);
+        const idle=1-speech;
+        x=anchor.x+(x-anchor.x)*(1+idle*(breath*.04+smile*.07));
+        y=anchor.y+(y-anchor.y)*(mood[1]+voiceLevel*2+idle*breath*.1);
+        y+=center*(voiceLevel*.024+idle*smile*.008+(expression==='tristeza'?-.006:0));
+      }
       if(j===0)ctx.moveTo(x*width,y*height);else ctx.lineTo(x*width,y*height);
+      if(line.length===1)ctx.lineTo(x*width+.01,y*height);
     });
-    if(line.length===1)ctx.lineTo(line[0][0]*width+.01,line[0][1]*height);
     ctx.stroke();
   });
   requestAnimationFrame(frame);
@@ -92,7 +114,7 @@ async function start(){
   if(!sessionStorage.getItem('paired')){
   pairingTimer=setTimeout(resetPairing,Math.max(0,session.inviteUntil-Date.now()));
   pairing=document.createElement('aside');
-  const url=new URL('/teacher',location.origin);url.hash=session.id+'.'+session.invite;
+  const url=new URL('/teacher?mic=manual-v2',location.origin);url.hash=session.id+'.'+session.invite;
   pairing.innerHTML='<h1>Vincular celular</h1><canvas aria-label="Código QR"></canvas><p>Toca aquí para activar el audio y la pantalla completa.</p>';
   document.body.append(pairing);
   pairing.onclick=()=>{audio.unlock();document.documentElement.requestFullscreen?.().catch(()=>{});};
@@ -156,5 +178,3 @@ if(location.hostname==='pizarramagica-1xg.pages.dev'){
 }
 
 navigator.serviceWorker?.register('/sw.js').catch(console.error);
-
-
