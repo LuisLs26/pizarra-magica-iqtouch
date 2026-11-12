@@ -80,7 +80,7 @@ async function start(){
   if(!sessionStorage.getItem('paired')){
   setTimeout(()=>{if(pairing&&link){pairing.remove();pairing=null;link.close();start().catch(console.error);}},Math.max(0,session.inviteUntil-Date.now()));
   pairing=document.createElement('aside');
-  const url=new URL('/teacher.html',location.origin);url.hash=session.id+'.'+session.invite;
+  const url=new URL('/teacher',location.origin);url.hash=session.id+'.'+session.invite;
   pairing.innerHTML='<h1>Vincular celular</h1><canvas aria-label="Código QR"></canvas><p>Toca aquí para activar el audio y la pantalla completa.</p>';
   document.body.append(pairing);
   pairing.onclick=()=>{audio.unlock();document.documentElement.requestFullscreen?.().catch(()=>{});};
@@ -95,4 +95,5 @@ async function start(){
 }
 start().catch(console.error);
 navigator.serviceWorker?.register('/sw.js').catch(console.error);
+
 
