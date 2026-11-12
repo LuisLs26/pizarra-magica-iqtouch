@@ -44,16 +44,29 @@ export function voice(){
       const localVoice=globalThis.speechSynthesis?.getVoices().find(v=>v.localService&&/^es(?:-|$)/i.test(v.lang));
       const waitForPiper=localVoice?700:18000;
       let timeout;
-      const prediction=Promise.resolve(warmup).then(()=>{
-        if(id!==serial)return;
-        return getPiper().then(piper=>piper.predict({text,voiceId}));
+      const words=text.trim().split(/\s+/);
+      let parts=[text];
+      if(words.length>13){
+        const boundary=words.slice(0,12).findIndex((word,index)=>index>=3&&/[,.!?;:]$/.test(word));
+        const split=boundary<0?10:boundary+1;
+        parts=[words.slice(0,split).join(' '),words.slice(split).join(' ')];
+      }
+      const synthesize=part=>getPiper().then(async piper=>{
+        const blob=await piper.predict({text:part,voiceId});
+        return context.decodeAudioData(await blob.arrayBuffer());
       });
+      const prediction=Promise.resolve(warmup).then(()=>id===serial?synthesize(parts[0]):null);
       const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Piper tardó en cargar')),waitForPiper);});
-      const blob=await Promise.race([prediction,deadline]).finally(()=>clearTimeout(timeout));
+      const first=await Promise.race([prediction,deadline]).finally(()=>clearTimeout(timeout));
       if(id!==serial)return;
-      const decoded=await context.decodeAudioData(await blob.arrayBuffer());
-      if(id!==serial)return;
-      await play(decoded,volume,1.31,()=>onStart('Piper'));return;
+      const firstPlayback=play(first,volume,1.31,()=>onStart('Piper'));
+      const rest=parts[1]?synthesize(parts[1]).catch(()=>null):null;
+      await firstPlayback;
+      if(rest&&id===serial){
+        const second=await rest;
+        if(second&&id===serial)await play(second,volume,1.31);
+      }
+      return;
     }catch(error){
       if(id!==serial)return;
       console.warn('Piper:',error.message);
