@@ -33,6 +33,17 @@ function axes(left,right){
   return {gap,along:p=>(p.x-x)*dx+(p.y-y)*dy,down:p=>(p.y-y)*dx-(p.x-x)*dy};
 }
 
+function canBeMouth(part,left,right,frame){
+  const {gap,along,down}=frame;
+  // The mouth belongs below both eyes and between their centers.
+  if(part.y<=Math.max(left.y,right.y)||down(part)<gap*.22||Math.abs(along(part))>gap*.42)return false;
+  if(!part.closed)return true;
+  // A round stroke matching a nearby eye is more likely its partner.
+  return ![left,right].some(eye=>eye.closed&&part.w>=eye.w*.55&&part.w<=eye.w*1.65&&
+    part.h>=eye.h*.55&&part.h<=eye.h*1.65&&Math.abs(part.x-eye.x)>=Math.max(part.w,eye.w)*.8&&
+    Math.abs(part.y-eye.y)<=Math.abs(part.x-eye.x)*.78);
+}
+
 function mouthProfile(lines,box,minWidth){
   const width=Math.max(box.w,minWidth);
   const top=[],bottom=[];
@@ -119,6 +130,7 @@ export function recognize(strokes,points){
     const mouths=candidates.filter(m=>{
       if(m===a||m===b||a.pupils.includes(m.i)||b.pupils.includes(m.i))return false;
       if(m.closed&&(inside(a,m)||inside(b,m)))return false;
+      if(!canBeMouth(m,a,b,{gap,along,down}))return false;
       const depth=down(m), offset=Math.abs(along(m));
       return depth>=gap*.19&&depth<=gap*2.5&&offset<=gap*.55&&m.w>=gap*(m.closed?.105:.18)&&size(m)<=gap*1.7;
     });
@@ -142,7 +154,8 @@ export function recognize(strokes,points){
     for(const eye of parts){
       if(!eye.closed||!inside(eye,head)||size(eye)>size(head)*.36||eye.y>=head.y)continue;
       const mouth=parts.filter(p=>p!==eye&&inside(p,head)&&p.y>eye.y+head.h*.18&&
-        Math.abs(p.x-eye.x)<head.w*.24&&p.w>=head.w*.12&&p.w<=head.w*.54&&p.h<head.h*.34)
+        Math.abs(p.x-eye.x)<head.w*.24&&p.w>=head.w*.12&&p.w<=head.w*.54&&p.h<head.h*.34&&
+        canBeMouth(p,eye,eye,{gap:head.w*.4,along:part=>part.x-eye.x,down:part=>part.y-eye.y}))
         .sort((a,b)=>b.y-a.y)[0];
       if(!mouth)continue;
       const side=eye.x<head.x?1:-1;
