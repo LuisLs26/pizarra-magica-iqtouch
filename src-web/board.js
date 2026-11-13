@@ -4,12 +4,13 @@ import {connect} from './link.js';
 import {voice} from './voice.js';
 const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
 let pairingTimer, interruption, returning=false;
-let mouthOpening=0, mouthRounding=0, speechPeak=.12, lastFrame=0;
+let mouthOpening=0, mouthRounding=0, lastFrame=0;
 const gestures=['look','wink','brows','sniff','smile','surprise','squint'];
 let gestureIndex=-1, gestureStart=0, nextGesture=0, gestureSide=1;
 let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
 const active=new Map();
 const audio=voice();
+let indexedFace, strokeGroups=[];
 function loadBoard(){try{const lines=JSON.parse(localStorage.getItem('board-drawing'));return validStrokes(lines)?lines:[];}catch{return [];}}
 function saveBoard(){try{localStorage.setItem('board-drawing',JSON.stringify(strokes));}catch{}}
 function resize(){width=canvas.clientWidth;height=canvas.clientHeight;const d=Math.min(devicePixelRatio,2);canvas.width=width*d;canvas.height=height*d;ctx.setTransform(d,0,0,d,0,0);}
@@ -61,59 +62,61 @@ function openMouth(mouth,amount,rounding){
   ctx.save();
   ctx.clip();
   ctx.beginPath();
-  ctx.ellipse(x*width,(y-interior*.15)*height,span*width*(.28-rounding*.08),interior*height*.30,0,0,2*Math.PI);
+  ctx.ellipse(x*width,(y-interior*.15)*height,span*width*(.28-rounding*.08),Math.max(0,interior)*height*.30,0,0,2*Math.PI);
   ctx.fillStyle='#f47c91';ctx.fill();
   ctx.restore();
   ctx.beginPath();curve(upper,true);curve(lower.slice().reverse(),false);ctx.closePath();ctx.stroke();
 }
 
 function frame(t){
+  requestAnimationFrame(frame);
+  const {playing,openness,rounding:roundTarget,emphasis:speech}=audio.speechFrame();
   if(t>nextBlink){
     blinkStart=t;
     doubleBlink=Math.random()<.24;
-    nextBlink=t+(busy?1200:1900)+Math.random()*2800;
+    nextBlink=t+(playing?950:1900)+Math.random()*(playing?1450:2800);
   }
   const blinkWave=offset=>Math.max(0,1-Math.abs(t-blinkStart-offset-75)/75);
   const blink=Math.max(blinkWave(0),doubleBlink?blinkWave(205):0);
-  const {level:voiceLevel,brightness}=audio.speechFrame();
   const dt=Math.min(45,t-lastFrame);
   lastFrame=t;
-  speechPeak=Math.max(.12,voiceLevel,speechPeak*Math.exp(-dt/520));
-  const speech=Math.max(0,(voiceLevel-.018)/speechPeak);
-  const jawTarget=speech**.72*(1-.48*brightness);
-  const roundTarget=(1-brightness)*Math.min(1,speech*1.5);
-  mouthRounding+=(roundTarget-mouthRounding)*(1-Math.exp(-dt/27));
+  mouthRounding+=(roundTarget-mouthRounding)*(1-Math.exp(-dt/18));
   if(face&&t>nextGesture){
     gestureIndex=(gestureIndex+1)%gestures.length;
     gestureStart=t;
-    nextGesture=t+2300+Math.random()*1300;
+    nextGesture=t+(playing?1050:2300)+Math.random()*(playing?650:1300);
     gestureSide=Math.random()<.5?-1:1;
   }
   const gesture=gestures[gestureIndex];
   const progress=Math.min(1,(t-gestureStart)/900);
-  const reaction=name=>gesture===name?Math.sin(progress*Math.PI)**2*(1-speech*.8):0;
+  const reaction=name=>gesture===name?Math.sin(progress*Math.PI)**2*(playing?.78:1):0;
   const look=reaction('look'), wink=reaction('wink'), brows=reaction('brows');
   const sniff=reaction('sniff'), grin=reaction('smile'), surprise=reaction('surprise'), squint=reaction('squint');
   const sniffMotion=sniff*Math.sin(progress*5*Math.PI);
-  mouthOpening+=(jawTarget-mouthOpening)*(1-Math.exp(-dt/(jawTarget>mouthOpening?15:33)));
+  mouthOpening+=(openness-mouthOpening)*(1-Math.exp(-dt/(openness>mouthOpening?10:23)));
   const gaze=Math.tanh(Math.sin(t/1030)*2)*.7+Math.sin(t/473)*.13;
   const gazeUp=Math.sin(t/1570)*.45;
-  const glance=Math.sin(t/315)*speech*.22;
+  const glance=playing?(Math.sin(t/290)*.26+Math.sin(t/171)*speech*.22):0;
   const breath=Math.sin(t/620)*.5+Math.sin(t/1380)*.5;
   const smile=Math.pow(Math.max(0,Math.sin(t/1160)*Math.cos(t/1830)),3);
   const mood=moods[expression]||moods.alegría;
-  const talking=mouthOpening>.035||speech>.025;
+  const talking=playing||mouthOpening>.035;
   const opening=talking?mouthOpening:Math.max(surprise*.52,grin*.26);
   const rounding=talking?mouthRounding:surprise;
-  const emphasis=mouthOpening;
+  const emphasis=speech;
   const eyeMid=face?.[0]?.role==='eye'&&face?.[1]?.role==='eye'?(face[0].x+face[1].x)/2:face?.[0]?.x;
   ctx.clearRect(0,0,width,height);
   ctx.strokeStyle='#171819';ctx.lineWidth=Math.max(3,Math.min(width,height)*.008);ctx.lineCap=ctx.lineJoin='round';
+  if(face!==indexedFace){
+    indexedFace=face;
+    strokeGroups=[];
+    for(const group of face||[])for(const id of group.ids)strokeGroups[id]=group;
+  }
   strokes.forEach((line,i)=>{
-    const anchor=face?.find(group=>group.ids.includes(i));
+    const anchor=strokeGroups[i];
     const role=anchor?.role;
     const pupil=anchor?.pupils?.includes(i);
-    if(role==='mouth'&&opening>.065){
+    if(role==='mouth'&&opening>.025){
       if(i===anchor.ids[0]){
         openMouth(anchor,opening,rounding);
         ctx.beginPath();
@@ -124,14 +127,14 @@ function frame(t){
     }
     const side=(anchor?.x??0)<eyeMid?-1:1;
     const closing=Math.max(blink,side===gestureSide?wink:0);
-    const eyeOpen=Math.max(.06,(mood[0]+breath*.09+emphasis*.45+surprise*.5-squint*.6)*(1-closing*.96));
+    const eyeOpen=Math.max(.06,(mood[0]+breath*.09+emphasis*.54+surprise*.5-squint*.6)*(1-closing*.96));
     const eyeLook=gaze+glance+look*gestureSide*.95;
     const eyeX=(pupil?anchor.w*.13+.001:Math.min(.003,(anchor?.w||0)*.08));
     const transform=([x,y])=>{
       if(role==='eye'){
         x+=eyeLook*eyeX;
         y=anchor.y+(y-anchor.y+(pupil?gazeUp*anchor.h*.13:0))*eyeOpen+gazeUp*.003;
-        if(anchor.h===0)y-=surprise*.004;
+        y-=(surprise+emphasis)*.004;
       }
       if(role==='mouth'){
         const center=Math.max(0,1-Math.abs(x-anchor.x)/.13);
@@ -164,7 +167,6 @@ function frame(t){
       ctx.fillStyle='#171819';ctx.fill();ctx.restore();
     }
   });
-  requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 function stop(){ticket++;audio.stop();busy=false;state();}
