@@ -267,6 +267,46 @@ function returnToPairing(){
   sessionStorage.removeItem('paired');
   setTimeout(()=>location.reload(),1200);
 }
+function prepareBoard(onReady){
+  const startup=document.getElementById('startup');
+  const status=document.getElementById('startup-status');
+  const title=document.getElementById('startup-title');
+  const actions=document.getElementById('startup-actions');
+  const spinner=startup.querySelector('.startup-spinner');
+  let opened=false;
+  let attemptId=0;
+  const open=()=>{
+    if(opened)return;
+    opened=true;
+    startup.hidden=true;
+    onReady();
+  };
+  async function load(){
+    const attempt=++attemptId;
+    title.textContent='Preparando la pizarra';
+    status.textContent='Cargando la voz. La primera vez puede tardar más mientras se descargan sus archivos.';
+    actions.hidden=true;
+    spinner.hidden=false;
+    const slow=setTimeout(()=>{
+      if(attempt!==attemptId||opened)return;
+      status.textContent='La voz sigue cargando. Puedes esperar o abrir la pizarra mientras termina.';
+      document.getElementById('startup-retry').hidden=true;
+      actions.hidden=false;
+    },20000);
+    try{await audio.prepare();if(attempt===attemptId)open();}
+    catch{
+      if(attempt!==attemptId||opened)return;
+      title.textContent='La voz aún no está lista';
+      status.textContent='Puedes reintentar la descarga o abrir la pizarra y preparar la voz después.';
+      spinner.hidden=true;
+      document.getElementById('startup-retry').hidden=false;
+      actions.hidden=false;
+    }finally{clearTimeout(slow);}
+  }
+  document.getElementById('startup-retry').onclick=load;
+  document.getElementById('startup-continue').onclick=open;
+  void load();
+}
 if(location.hostname==='pizarramagica-1xg.pages.dev'){
   location.replace('https://pizarra-magica-iqtouch.luisnurenagonzales.workers.dev/');
 }else{
@@ -276,14 +316,20 @@ if(location.hostname==='pizarramagica-1xg.pages.dev'){
   home.title='Volver al código QR';
   home.innerHTML='<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 21v-7h6v7"/></svg>';
   home.style.cssText='position:fixed;right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));z-index:2;display:grid;place-items:center;width:48px;height:48px;border:1px solid #dce7ee;border-radius:14px;background:#fffdf6;color:#25394c;cursor:pointer;touch-action:manipulation';
+  home.style.visibility='hidden';
+  const startup=document.getElementById('startup');
   home.onclick=returnToPairing;
   document.body.append(home);
   addEventListener('keydown',event=>{
+    if(!startup.hidden)return;
     if(event.key.toLowerCase()!=='q'||!event.altKey||!event.shiftKey||event.repeat)return;
     event.preventDefault();
     returnToPairing();
   });
-  begin();
+  prepareBoard(()=>{
+    home.style.visibility='';
+    begin();
+  });
 }
 
 navigator.serviceWorker?.register('/sw.js').catch(console.error);

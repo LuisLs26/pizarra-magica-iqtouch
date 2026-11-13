@@ -1,2 +1,25 @@
-<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>Pizarra Mágica</title><link rel="stylesheet" href="/board.css"><canvas aria-label="Pizarra cuadriculada"></canvas><script type="module" src="/board.js"></script></html>
-
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Pizarra Mágica</title>
+  <link rel="stylesheet" href="/board.css">
+</head>
+<body>
+  <canvas aria-label="Pizarra cuadriculada"></canvas>
+  <div id="startup" class="startup">
+    <section class="startup-card" aria-labelledby="startup-title">
+      <div class="startup-spinner" aria-hidden="true"></div>
+      <h1 id="startup-title">Preparando la pizarra</h1>
+      <p id="startup-status" role="status">Cargando la voz. La primera vez puede tardar más mientras se descargan sus archivos.</p>
+      <div id="startup-actions" hidden>
+        <button type="button" id="startup-retry">Reintentar</button>
+        <button type="button" id="startup-continue">Continuar a la pizarra</button>
+      </div>
+    </section>
+  </div>
+  <script type="module" src="/board.js"></script>
+</body>
+</html>

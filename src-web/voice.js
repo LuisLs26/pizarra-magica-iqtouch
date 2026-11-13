@@ -66,12 +66,12 @@ export function sampleSpeech(track,seconds){
 
 export function voice(){
   let context, gain, playback, articulation, activation, serial=0;
-  let worker, warmed=false, jobId=0, speechJob;
+  let worker, warmup, jobId=0, speechJob;
   const pending=new Map();
   function resetWorker(error){
     worker?.terminate();
     worker=null;
-    warmed=false;
+    warmup=null;
     for(const job of pending.values())job.reject(error);
     pending.clear();
   }
@@ -99,19 +99,21 @@ export function voice(){
     return {id,promise};
   }
   function prepare(){
-    if(warmed||speechJob)return;
-    try{
+    if(warmup)return warmup;
+    if(speechJob)return speechJob.promise.then(()=>{});
+    const attempt=(async ()=>{
       const job=requestSpeech('Hola.',true);
-      warmed=true;
       const timer=setTimeout(()=>{
-        if(pending.has(job.id)&&!speechJob)resetWorker(Error('Piper tardó en cargar'));
-      },18000);
-      const instance=worker;
-      job.promise.catch(()=>{if(worker===instance)warmed=false;}).finally(()=>clearTimeout(timer));
-    }catch{}
+        if(pending.has(job.id))resetWorker(Error('Piper tardó en cargar'));
+      },90000);
+      try{await job.promise;}finally{clearTimeout(timer);}
+    })();
+    warmup=attempt;
+    void attempt.catch(()=>{if(warmup===attempt)warmup=null;});
+    return attempt;
   }
   function unlock(){
-    prepare();
+    void prepare().catch(()=>{});
     context??=new AudioContext();
     if(!gain){gain=context.createGain();gain.connect(context.destination);}
     activation=context.resume().then(()=>true,()=>false);
@@ -164,8 +166,7 @@ export function voice(){
       if(speechJob===job)speechJob=null;
     }
   }
-  prepare();
-  return {unlock,stop,volume(v){if(gain)gain.gain.value=v;},speechFrame(){
+  return {prepare,unlock,stop,volume(v){if(gain)gain.gain.value=v;},speechFrame(){
     if(!articulation||context.state!=='running')return silentFrame;
     const stamp=context.getOutputTimestamp?.();
     const age=stamp?(performance.now()-stamp.performanceTime)/1000:Infinity;
@@ -188,6 +189,8 @@ export function voice(){
       }
       if(id!==serial)return;
       if(context?.state!=='running')throw Error('Audio bloqueado');
+      await prepare();
+      if(id!==serial)return;
       const parts=splitSpeech(text);
       let next=synthesize(parts[0]);
       for(let i=0;i<parts.length;i++){
