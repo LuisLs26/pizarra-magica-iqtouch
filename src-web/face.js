@@ -69,7 +69,7 @@ function buildFace(strokes,parts,left,right,mouth){
     if(claimed.has(p.i))continue;
     const offset=Math.abs(along(p)-along(mouth));
     if(inside(p,mouth)&&p.w<mouth.w*.8){details.push(p.i);claimed.add(p.i);}
-    else if(!mouth.closed&&!p.closed&&p.w>mouth.w*.52&&p.w<mouth.w*1.55&&offset<mouth.w*.3&&Math.abs(down(p)-mouthDepth)<gap*.22){
+    else if(!mouth.closed&&!p.closed&&p.h<p.w&&p.w>mouth.w*.52&&p.w<mouth.w*1.55&&offset<mouth.w*.3&&Math.abs(down(p)-mouthDepth)<Math.min(gap*.22,mouth.w*.34)){
       lips.push(p.i);claimed.add(p.i);
     }
   }
@@ -116,10 +116,20 @@ export function recognize(strokes,points){
     const {gap,along,down}=axes(a,b);
     if(Math.max(size(a),size(b))>gap*1.12||a.pupils.includes(b.i)||b.pupils.includes(a.i))continue;
     const apparentEye=a.quality+b.quality;
-    for(const m of candidates){
-      if(m===a||m===b||a.pupils.includes(m.i)||b.pupils.includes(m.i))continue;
+    const mouths=candidates.filter(m=>{
+      if(m===a||m===b||a.pupils.includes(m.i)||b.pupils.includes(m.i))return false;
+      if(m.closed&&(inside(a,m)||inside(b,m)))return false;
       const depth=down(m), offset=Math.abs(along(m));
-      if(depth<gap*.19||depth>gap*2.5||offset>gap*.55||m.w<gap*(m.closed?.105:.18)||size(m)>gap*1.7)continue;
+      return depth>=gap*.19&&depth<=gap*2.5&&offset<=gap*.55&&m.w>=gap*(m.closed?.105:.18)&&size(m)<=gap*1.7;
+    });
+    // Use the eye axis so the lower central stroke still wins on tilted faces.
+    const lowerMouthDepth=mouths.reduce((deepest,m)=>{
+      if(Math.abs(along(m))>gap*.36||(!m.closed&&m.h>m.w))return deepest;
+      return Math.max(deepest,down(m));
+    },-Infinity);
+    for(const m of mouths){
+      const depth=down(m), offset=Math.abs(along(m));
+      if(depth<lowerMouthDepth-gap*.09)continue;
       const cost=offset/gap+.25*Math.abs(depth/gap-.73)+Math.abs(a.y-b.y)/gap*.27
         +Math.abs(size(a)-size(b))/gap*.16-apparentEye
         -(Math.min(m.w/gap,.78)*.16);
@@ -131,8 +141,9 @@ export function recognize(strokes,points){
     if(!head.closed||head.w<.08||head.h<.1)continue;
     for(const eye of parts){
       if(!eye.closed||!inside(eye,head)||size(eye)>size(head)*.36||eye.y>=head.y)continue;
-      const mouth=parts.find(p=>p!==eye&&inside(p,head)&&p.y>eye.y+head.h*.18&&
-        Math.abs(p.x-eye.x)<head.w*.24&&p.w>=head.w*.12&&p.w<=head.w*.54&&p.h<head.h*.34);
+      const mouth=parts.filter(p=>p!==eye&&inside(p,head)&&p.y>eye.y+head.h*.18&&
+        Math.abs(p.x-eye.x)<head.w*.24&&p.w>=head.w*.12&&p.w<=head.w*.54&&p.h<head.h*.34)
+        .sort((a,b)=>b.y-a.y)[0];
       if(!mouth)continue;
       const side=eye.x<head.x?1:-1;
       const partner={i:null,x:eye.x+side*head.w*.4,y:eye.y};
