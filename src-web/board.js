@@ -229,8 +229,9 @@ async function start(){
   await QRCode.toCanvas(pairing.querySelector('canvas'),url.href,{width:250});
   }
 
-  link=connect(session.id,session.token,receive,online=>{
+  link=connect(session.id,session.token,receive,(online,code)=>{
     clearTimeout(interruption);
+    if(code===4000){stop();return;}
     if(online){state();if(disconnected){disconnected=false;announcement('online');}}
     else interruption=setTimeout(()=>{if(!disconnected){disconnected=true;stop();announcement(offline[Math.floor(Math.random()*offline.length)]);}},3500);
   });

@@ -16,6 +16,12 @@ function controls(){
 }
 function clearAudioQueue(){clearTimeout(queueTimer);audioQueue.length=0;}
 function halt(){clearAudioQueue();enableId++;openingMic=false;capture?.close();capture=null;pending?.abort();pending=null;controls();}
+function losePeer(){
+  const interrupted=openingMic||capture||pending||audioQueue.length>0;
+  peer=false;ready=false;busy=false;speaking=false;
+  halt();
+  if(interrupted)$('ai').textContent='La conexión se interrumpió. Cuando vuelva, graba la pregunta otra vez.';
+}
 function command(action,value){if(peer)link.send({type:'command',action,value});}
 function render(){
   $('drawings').replaceChildren(...drawings.map((drawing,index)=>{
@@ -34,7 +40,7 @@ function render(){
 }
 function receive(m){
   if(m.type==='peer'){peer=true;$('connection').textContent='Pizarra conectada';}
-  if(m.type==='peer-left'){peer=false;ready=false;busy=false;speaking=false;$('connection').textContent='Pizarra desconectada. Esperando reconexión…';}
+  if(m.type==='peer-left'){losePeer();$('connection').textContent='Pizarra desconectada. Esperando reconexión…';}
   if(m.type==='state'){ready=m.ready;if(busy&&!m.busy){cooldown=performance.now()+250;speaking=false;}busy=m.busy;drainAudio();}
   if(m.type==='provider'){
     speaking=m.provider==='Piper'||m.provider==='Voz del navegador';
@@ -75,10 +81,17 @@ function enqueueAudio(clips){
 
 function drainAudio(){
   clearTimeout(queueTimer);
-  if(!peer||!ready||blocked||pending||busy)return;
-  const wait=cooldown-performance.now();
-  if(wait>0){queueTimer=setTimeout(drainAudio,wait);return;}
-  while(audioQueue[0]?.expires<=performance.now())audioQueue.shift();
+  const now=performance.now();
+  if(audioQueue.length&&audioQueue[0].expires<=now){
+    while(audioQueue[0]?.expires<=now)audioQueue.shift();
+    $('ai').textContent='La pregunta quedó en espera demasiado tiempo. Toca para hablar de nuevo.';
+    controls();
+  }
+  if(!audioQueue.length)return;
+  const expiresIn=audioQueue[0].expires-now;
+  if(!peer||!ready||blocked||pending||busy){queueTimer=setTimeout(drainAudio,expiresIn);return;}
+  const wait=cooldown-now;
+  if(wait>0){queueTimer=setTimeout(drainAudio,Math.min(wait,expiresIn));return;}
   const clip=audioQueue.shift();
   if(clip)submit(clip);
 }
@@ -119,11 +132,12 @@ async function submit(clip){
     });
     const m=await response.json();
     if(response.status===409){
-      if(!request.signal.aborted&&clip.expires>performance.now()){
-        if(audioQueue.length===2)audioQueue.pop();
-        audioQueue.unshift(clip);
-        cooldown=performance.now()+250;
-      }
+      if(request.signal.aborted)return;
+      if(clip.expires<=performance.now())throw Error('La pizarra sigue ocupada. Toca para hablar de nuevo.');
+      if(audioQueue.length===2)audioQueue.pop();
+      audioQueue.unshift(clip);
+      cooldown=performance.now()+250;
+      $('ai').textContent='La pizarra está ocupada. Tu pregunta está en espera.';
       return;
     }
     if(!response.ok){
@@ -187,9 +201,10 @@ async function start(){
   }
   if(id)window.history.replaceState(null,'',location.pathname);
   if(!session||session.expires<Date.now())throw Error('Escanea el QR que aparece en la pizarra.');
-  link=connect(session.id,session.token,receive,online=>{
+  link=connect(session.id,session.token,receive,(online,code)=>{
     connected=online;
-    if(!online){peer=false;ready=false;busy=false;speaking=false;pending?.abort();}
+    if(!online)losePeer();
+    if(code===4000){$('connection').textContent='Esta sesión está abierta en otra pestaña.';return;}
     $('connection').textContent=connected?'Esperando a la pizarra…':'Reconectando…';controls();
   });
 }
