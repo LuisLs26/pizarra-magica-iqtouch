@@ -43,19 +43,50 @@ export function sampleSpeech(track,seconds){
 }
 
 export function voice(){
-  let context, gain, playback, articulation, activation, serial=0, model, warmup;
-  const voiceId='es_ES-davefx-medium';
-  function getPiper(){
-    model??=import('@mintplex-labs/piper-tts-web').catch(error=>{
-      model=null;
-      throw error;
+  let context, gain, playback, articulation, activation, serial=0;
+  let worker, warmed=false, jobId=0, speechJob;
+  const pending=new Map();
+  function resetWorker(error){
+    worker?.terminate();
+    worker=null;
+    warmed=false;
+    for(const job of pending.values())job.reject(error);
+    pending.clear();
+  }
+  function requestSpeech(text,warmup=false){
+    if(!worker){
+      worker=new Worker(new URL('./piper.worker.js',import.meta.url),{type:'module'});
+      const instance=worker;
+      worker.onmessage=({data})=>{
+        if(worker!==instance)return;
+        const job=pending.get(data.id);
+        if(!job)return;
+        pending.delete(data.id);
+        if(data.error)job.reject(Error(data.error));
+        else job.resolve(data.audio);
+      };
+      worker.onerror=()=>{if(worker===instance)resetWorker(Error('Piper no pudo iniciar'));};
+      worker.onmessageerror=()=>{if(worker===instance)resetWorker(Error('Piper devolvió un audio inválido'));};
+    }
+    const id=++jobId;
+    const promise=new Promise((resolve,reject)=>{
+      pending.set(id,{resolve,reject});
+      try{worker.postMessage({id,text,warmup});}
+      catch(error){pending.delete(id);reject(error);}
     });
-    return model;
+    return {id,promise};
   }
   function prepare(){
-    warmup??=getPiper().then(piper=>piper.predict({text:'Hola.',voiceId})).then(()=>{},()=>{
-      warmup=null;
-    });
+    if(warmed||speechJob)return;
+    try{
+      const job=requestSpeech('Hola.',true);
+      warmed=true;
+      const timer=setTimeout(()=>{
+        if(pending.has(job.id)&&!speechJob)resetWorker(Error('Piper tardó en cargar'));
+      },18000);
+      const instance=worker;
+      job.promise.catch(()=>{if(worker===instance)warmed=false;}).finally(()=>clearTimeout(timer));
+    }catch{}
   }
   function unlock(){
     prepare();
@@ -66,6 +97,7 @@ export function voice(){
   function stop(){
     serial++;
     articulation=null;
+    if(speechJob&&pending.has(speechJob.id))resetWorker(Error('Reproducción cancelada'));
     if(!playback)return;
     const {source,done}=playback;
     playback=null;
@@ -118,16 +150,17 @@ export function voice(){
       }
       if(id!==serial)return;
       if(context?.state!=='running')throw Error('Audio bloqueado');
-      let timeout;
-      const prediction=Promise.resolve(warmup).then(async ()=>{
-        if(id!==serial)return null;
-        const piper=await getPiper();
-        if(id!==serial)return null;
-        const blob=await piper.predict({text,voiceId});
-        return context.decodeAudioData(await blob.arrayBuffer());
+      const job=requestSpeech(text);
+      speechJob=job;
+      const timeout=setTimeout(()=>{
+        if(pending.has(job.id))resetWorker(Error('Piper tardó en cargar'));
+      },18000);
+      const audio=await job.promise.finally(()=>{
+        clearTimeout(timeout);
+        if(speechJob===job)speechJob=null;
       });
-      const deadline=new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Piper tardó en cargar')),18000);});
-      const buffer=await Promise.race([prediction,deadline]).finally(()=>clearTimeout(timeout));
+      if(id!==serial)return;
+      const buffer=await context.decodeAudioData(audio);
       if(id!==serial)return;
       await play(buffer,volume,1.31,()=>onStart?.('Piper'));
     }catch(error){
