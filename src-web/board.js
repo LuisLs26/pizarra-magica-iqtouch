@@ -4,7 +4,7 @@ import {connect} from './link.js';
 import {voice} from './voice.js';
 const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
 let pairingTimer, interruption, returning=false;
-let mouthOpening=0, mouthRounding=0, lastFrame=0;
+let mouthOpening=0, mouthRounding=0, speakingPose=0, lastFrame=0;
 const gestures=['look','wink','brows','sniff','smile','surprise','squint'];
 let gestureIndex=-1, gestureStart=0, nextGesture=0, gestureSide=1;
 let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
@@ -48,12 +48,12 @@ function curve(points,move){
   ctx.lineTo(endX*width,endY*height);
 }
 
-function openMouth(mouth,amount,rounding){
+function openMouth(mouth,amount,lipWidth){
   const {top,bottom,width:span,height:depth}=mouth.profile;
   const opening=Math.min(span*.53,span*.26+depth*.35)*amount;
-  const lipX=x=>mouth.x+(x-mouth.x)*(1-rounding*.32);
-  const upper=top.map(([x,y],i)=>[lipX(x),y-opening*.30*Math.sin(Math.PI*i/(top.length-1))]);
-  const lower=bottom.map(([x,y],i)=>[lipX(x),y+opening*.70*Math.sin(Math.PI*i/(bottom.length-1))]);
+  const lipX=x=>mouth.x+(x-mouth.x)*lipWidth;
+  const upper=top.map(([x,y],i)=>[lipX(x),y-opening*.24*Math.sin(Math.PI*i/(top.length-1))]);
+  const lower=bottom.map(([x,y],i)=>[lipX(x),y+opening*.76*Math.sin(Math.PI*i/(bottom.length-1))]);
   ctx.beginPath();curve(upper,true);curve(lower.slice().reverse(),false);ctx.closePath();
   ctx.fillStyle='#3b202a';ctx.fill();
   const middle=upper.length>>1;
@@ -62,7 +62,7 @@ function openMouth(mouth,amount,rounding){
   ctx.save();
   ctx.clip();
   ctx.beginPath();
-  ctx.ellipse(x*width,(y-interior*.15)*height,span*width*(.28-rounding*.08),Math.max(0,interior)*height*.30,0,0,2*Math.PI);
+  ctx.ellipse(x*width,(y-interior*.15)*height,span*width*.28*lipWidth,Math.max(0,interior)*height*.30,0,0,2*Math.PI);
   ctx.fillStyle='#f47c91';ctx.fill();
   ctx.restore();
   ctx.beginPath();curve(upper,true);curve(lower.slice().reverse(),false);ctx.closePath();ctx.stroke();
@@ -73,13 +73,14 @@ function frame(t){
   const {playing,openness,rounding:roundTarget,emphasis:speech}=audio.speechFrame();
   if(t>nextBlink){
     blinkStart=t;
-    doubleBlink=Math.random()<.24;
-    nextBlink=t+(playing?950:1900)+Math.random()*(playing?1450:2800);
+    doubleBlink=!playing&&Math.random()<.24;
+    nextBlink=t+(playing?3200:1900)+Math.random()*(playing?2300:2800);
   }
   const blinkWave=offset=>Math.max(0,1-Math.abs(t-blinkStart-offset-75)/75);
   const blink=Math.max(blinkWave(0),doubleBlink?blinkWave(205):0);
   const dt=Math.min(45,t-lastFrame);
   lastFrame=t;
+  speakingPose+=(Number(playing)-speakingPose)*(1-Math.exp(-dt/105));
   mouthRounding+=(roundTarget-mouthRounding)*(1-Math.exp(-dt/18));
   if(face&&t>nextGesture){
     gestureIndex=(gestureIndex+1)%gestures.length;
@@ -96,14 +97,16 @@ function frame(t){
   mouthOpening+=(openness-mouthOpening)*(1-Math.exp(-dt/(openness>mouthOpening?10:23)));
   const gaze=Math.tanh(Math.sin(t/1030)*2)*.7+Math.sin(t/473)*.13;
   const gazeUp=Math.sin(t/1570)*.45;
-  const glance=playing?(Math.sin(t/290)*.26+Math.sin(t/171)*speech*.22):0;
   const breath=Math.sin(t/620)*.5+Math.sin(t/1380)*.5;
   const smile=Math.pow(Math.max(0,Math.sin(t/1160)*Math.cos(t/1830)),3);
   const mood=moods[expression]||moods.alegría;
   const talking=playing||mouthOpening>.035;
-  const opening=talking?mouthOpening:Math.max(surprise*.52,grin*.26);
-  const rounding=talking?mouthRounding:surprise;
+  const opening=talking?mouthOpening*1.45:Math.max(surprise*.52,grin*.26);
+  const lipWidth=talking?1+.19*opening-.46*mouthRounding:1-.32*surprise;
   const emphasis=speech;
+  const eyeMotion=1-.77*speakingPose;
+  const eyeLook=(gaze+look*gestureSide*.95)*eyeMotion;
+  const eyeGazeUp=gazeUp*eyeMotion;
   const eyeMid=face?.[0]?.role==='eye'&&face?.[1]?.role==='eye'?(face[0].x+face[1].x)/2:face?.[0]?.x;
   ctx.clearRect(0,0,width,height);
   ctx.strokeStyle='#171819';ctx.lineWidth=Math.max(3,Math.min(width,height)*.008);ctx.lineCap=ctx.lineJoin='round';
@@ -118,23 +121,22 @@ function frame(t){
     const pupil=anchor?.pupils?.includes(i);
     if(role==='mouth'&&opening>.025){
       if(i===anchor.ids[0]){
-        openMouth(anchor,opening,rounding);
+        openMouth(anchor,opening,lipWidth);
         ctx.beginPath();
-        for(const id of anchor.details)trace(strokes[id],([x,y])=>[anchor.x+(x-anchor.x)*(1-rounding*.32),y+anchor.profile.width*opening*.06]);
+        for(const id of anchor.details)trace(strokes[id],([x,y])=>[anchor.x+(x-anchor.x)*lipWidth,y+anchor.profile.width*opening*.06]);
         ctx.stroke();
       }
       return;
     }
     const side=(anchor?.x??0)<eyeMid?-1:1;
-    const closing=Math.max(blink,side===gestureSide?wink:0);
-    const eyeOpen=Math.max(.06,(mood[0]+breath*.09+emphasis*.54+surprise*.5-squint*.6)*(1-closing*.96));
-    const eyeLook=gaze+glance+look*gestureSide*.95;
+    const closing=Math.max(blink,side===gestureSide?wink*(1-speakingPose):0);
+    const eyeOpen=Math.max(.06,(mood[0]+(breath*.09+surprise*.5-squint*.6)*eyeMotion)*(1-closing*.96));
     const eyeX=(pupil?anchor.w*.13+.001:Math.min(.003,(anchor?.w||0)*.08));
     const transform=([x,y])=>{
       if(role==='eye'){
         x+=eyeLook*eyeX;
-        y=anchor.y+(y-anchor.y+(pupil?gazeUp*anchor.h*.13:0))*eyeOpen+gazeUp*.003;
-        y-=(surprise+emphasis)*.004;
+        y=anchor.y+(y-anchor.y+(pupil?eyeGazeUp*anchor.h*.13:0))*eyeOpen+eyeGazeUp*.003;
+        y-=surprise*.004*eyeMotion;
       }
       if(role==='mouth'){
         const center=Math.max(0,1-Math.abs(x-anchor.x)/.13);
@@ -148,7 +150,7 @@ function frame(t){
           +brows*(anchor.side===gestureSide?.27:.08)+arch*.14*grin+(expression==='sorpresa'?.17:0));
         y-=lift+(x-anchor.x)*anchor.side*(gaze*.15+speech*.10);
       }
-      if(role==='lash')y+=closing*.009-speech*.002;
+      if(role==='lash')y+=closing*.009;
       if(role==='nose'){
         x=anchor.x+(x-anchor.x)*(1+.19*sniff+.11*speech)+sniffMotion*.006+look*gestureSide*.002;
         y=anchor.y+(y-anchor.y)*(1-.22*sniff)+breath*.0015-emphasis*.005-sniff*.005;
@@ -160,7 +162,7 @@ function frame(t){
     ctx.beginPath();trace(line,transform);ctx.stroke();
     if(role==='eye'&&anchor.addPupil&&eyeOpen>.13){
       ctx.save();ctx.closePath();ctx.clip();
-      const [x,y]=transform([anchor.x+eyeLook*anchor.w*.17,anchor.y+gazeUp*anchor.h*.2]);
+      const [x,y]=transform([anchor.x+eyeLook*anchor.w*.17,anchor.y+eyeGazeUp*anchor.h*.2]);
       ctx.beginPath();
       const radius=Math.min(anchor.w*width,anchor.h*height)*.115;
       ctx.ellipse(x*width,y*height,radius,Math.max(.35,radius*eyeOpen),0,0,2*Math.PI);
