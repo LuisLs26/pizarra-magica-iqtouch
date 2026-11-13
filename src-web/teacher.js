@@ -5,16 +5,17 @@ const $=id=>document.getElementById(id);
 let session,link,connected=false,peer=false,ready=false,busy=false,speaking=false,capture,pending,blocked=false,enableId=0,cooldown=0,snapshotAction,points=[];
 const audioQueue=[];
 let queueTimer;
+let openingMic=false;
 const load=key=>{try{return JSON.parse(localStorage.getItem(key)||'[]');}catch{return [];}};
 let drawings=load('characters'), history=load('history');
 function persist(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true;}catch{$('connection').textContent='Almacenamiento local lleno o no disponible';return false;}}
 function controls(){
-  $('mic').disabled=!capture&&(!peer||!ready||blocked||busy||!!pending||audioQueue.length>0);
+  $('mic').disabled=openingMic||(!capture&&(!peer||!ready||blocked||busy||!!pending||audioQueue.length>0));
   $('mic').textContent=capture?'Toca para enviar':'Toca para hablar';
   for(const button of document.querySelectorAll('[data-action],#save,#correct,#speech button,#end'))button.disabled=!peer;
 }
 function clearAudioQueue(){clearTimeout(queueTimer);audioQueue.length=0;}
-function halt(){clearAudioQueue();enableId++;capture?.close();capture=null;pending?.abort();pending=null;controls();}
+function halt(){clearAudioQueue();enableId++;openingMic=false;capture?.close();capture=null;pending?.abort();pending=null;controls();}
 function command(action,value){if(peer)link.send({type:'command',action,value});}
 function render(){
   $('drawings').replaceChildren(...drawings.map((drawing,index)=>{
@@ -35,7 +36,14 @@ function receive(m){
   if(m.type==='peer'){peer=true;$('connection').textContent='Pizarra conectada';}
   if(m.type==='peer-left'){peer=false;ready=false;busy=false;speaking=false;$('connection').textContent='Pizarra desconectada. Esperando reconexión…';}
   if(m.type==='state'){ready=m.ready;if(busy&&!m.busy){cooldown=performance.now()+250;speaking=false;}busy=m.busy;drainAudio();}
-  if(m.type==='provider'){speaking=m.provider!=='audio no disponible';$('voice').textContent='Voz de la pizarra · '+m.provider;}
+  if(m.type==='provider'){
+    speaking=m.provider==='Piper'||m.provider==='Voz del navegador';
+    $('voice').textContent=m.reason==='blocked'
+      ?'Toca la pantalla de la pizarra para activar el audio y escuchar la respuesta.'
+      :m.provider==='audio no disponible'
+        ?'La pizarra no pudo reproducir la voz. Toca Repetir para intentarlo de nuevo.'
+        :'Voz de la pizarra · '+m.provider;
+  }
   if(m.type==='end'){halt();link.close();peer=false;ready=false;busy=false;speaking=false;sessionStorage.removeItem('teacher');$('connection').textContent='Sesión finalizada. Escanea un nuevo QR.';}
   if(m.type==='snapshot'&&snapshotAction){
     const action=snapshotAction;snapshotAction=null;
@@ -132,6 +140,7 @@ async function submit(clip){
   }catch(e){if(!request.signal.aborted)$('ai').textContent=e.message;}finally{if(pending===request){pending=null;drainAudio();controls();}}
 }
 $('mic').onclick=async()=>{
+  if(openingMic)return;
   if(capture){
     const clips=capture.finish();
     capture=null;
@@ -141,7 +150,7 @@ $('mic').onclick=async()=>{
     controls();
     return;
   }
-  const id=++enableId;$('mic').disabled=true;
+  const id=++enableId;openingMic=true;controls();
   try{
     const recording=await microphone(()=>!speaking,()=>{
       halt();
@@ -149,7 +158,8 @@ $('mic').onclick=async()=>{
     });
     if(id!==enableId){recording.close();return;}
     capture=recording;$('ai').textContent='Micrófono activo.';
-  }catch(e){$('ai').textContent='No se pudo activar el micrófono. Revisa los permisos del navegador.';}finally{controls();}
+  }catch(e){if(id===enableId)$('ai').textContent='No se pudo activar el micrófono. Revisa los permisos del navegador.';}
+  finally{if(id===enableId){openingMic=false;controls();}}
 };
 for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{if(['stop','clear'].includes(b.dataset.action)){clearAudioQueue();pending?.abort();pending=null;}command(b.dataset.action);};
 $('emotion').onchange=e=>command('emotion',e.target.value.toLowerCase());

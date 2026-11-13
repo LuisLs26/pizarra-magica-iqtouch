@@ -43,7 +43,7 @@ export function sampleSpeech(track,seconds){
 }
 
 export function voice(){
-  let context, gain, playback, articulation, serial=0, model, warmup;
+  let context, gain, playback, articulation, activation, serial=0, model, warmup;
   const voiceId='es_ES-davefx-medium';
   function getPiper(){
     model??=import('@mintplex-labs/piper-tts-web').catch(error=>{
@@ -61,7 +61,7 @@ export function voice(){
     prepare();
     context??=new AudioContext();
     if(!gain){gain=context.createGain();gain.connect(context.destination);}
-    context.resume().catch(()=>{});
+    activation=context.resume().then(()=>true,()=>false);
   }
   function stop(){
     serial++;
@@ -99,9 +99,10 @@ export function voice(){
   return {unlock,stop,volume(v){if(gain)gain.gain.value=v;},speechFrame(){
     if(!articulation||context.state!=='running')return silentFrame;
     const stamp=context.getOutputTimestamp?.();
-    const time=stamp?.performanceTime>0
-      ?Math.min(context.currentTime,stamp.contextTime+(performance.now()-stamp.performanceTime)/1000)
-      :context.currentTime;
+    const age=stamp?(performance.now()-stamp.performanceTime)/1000:Infinity;
+    const outputTime=stamp?.contextTime+age;
+    const time=stamp?.performanceTime>0&&age>=0&&age<.25&&Number.isFinite(outputTime)
+      ?Math.min(context.currentTime,outputTime):context.currentTime;
     const {track,started,rate}=articulation;
     const seconds=(time-started)*rate;
     if(seconds>=track.duration)articulation=null;
@@ -110,6 +111,12 @@ export function voice(){
   async speak(text,volume,onStart){
     const id=serial;
     try{
+      if(context?.state!=='running'&&activation){
+        let timer;
+        const expiry=new Promise(resolve=>{timer=setTimeout(resolve,800);});
+        await Promise.race([activation,expiry]).finally(()=>clearTimeout(timer));
+      }
+      if(id!==serial)return;
       if(context?.state!=='running')throw Error('Audio bloqueado');
       let timeout;
       const prediction=Promise.resolve(warmup).then(async ()=>{

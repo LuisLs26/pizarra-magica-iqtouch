@@ -10,7 +10,7 @@ let gestureIndex=-1, gestureStart=0, nextGesture=0, gestureSide=1;
 let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
 const active=new Map();
 const audio=voice();
-let indexedFace, strokeGroups=[];
+let indexedFace, strokeGroups=[], speechToRetry='';
 function loadBoard(){try{const lines=JSON.parse(localStorage.getItem('board-drawing'));return validStrokes(lines)?lines:[];}catch{return [];}}
 function saveBoard(){try{localStorage.setItem('board-drawing',JSON.stringify(strokes));}catch{}}
 function resize(){width=canvas.clientWidth;height=canvas.clientHeight;const d=Math.min(devicePixelRatio,2);canvas.width=width*d;canvas.height=height*d;ctx.setTransform(d,0,0,d,0,0);}
@@ -18,6 +18,7 @@ addEventListener('resize',resize);resize();
 function point(e){return [Math.min(1,Math.max(0,e.clientX/width)),Math.min(1,Math.max(0,e.clientY/height))];}
 canvas.onpointerdown=e=>{
   audio.unlock();
+  if(speechToRetry)say(speechToRetry);
   if(!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});
   if(pairing||face||strokes.length>=100||e.button!==0||e.width>45||e.height>45)return;
   clearTimeout(timer);canvas.setPointerCapture(e.pointerId);
@@ -171,16 +172,24 @@ function frame(t){
   });
 }
 requestAnimationFrame(frame);
-function stop(){ticket++;audio.stop();busy=false;state();}
+function stop(){ticket++;speechToRetry='';audio.stop();busy=false;state();}
 async function say(text){
   if(!face||!text)return;
-  stop();
+  ticket++;
+  speechToRetry='';
+  audio.stop();
   const turn=ticket;
   busy=true;
   state();
-  const report=provider=>{if(turn===ticket)link?.send({type:'provider',provider});};
+  const report=(provider,reason)=>{if(turn===ticket)link?.send({type:'provider',provider,reason});};
   try{await audio.speak(text,volume,report);}
-  catch(error){console.warn('Reproducción:',error.message);report('audio no disponible');}
+  catch(error){
+    console.warn('Reproducción:',error.message);
+    if(turn===ticket&&error.message==='Audio bloqueado'){
+      speechToRetry=text;
+      report('audio no disponible','blocked');
+    }else report('audio no disponible');
+  }
   finally{if(turn===ticket){busy=false;state();}}
 }
 const offline=['offline-1','offline-2','offline-3'];
