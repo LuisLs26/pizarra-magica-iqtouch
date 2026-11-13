@@ -5,6 +5,8 @@ import {voice} from './voice.js';
 const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
 let pairingTimer, interruption, returning=false;
 let mouthOpening=0, lastFrame=0;
+const gestures=['look','wink','brows','sniff','smile','surprise','squint'];
+let gestureIndex=-1, gestureStart=0, nextGesture=0, gestureSide=1;
 let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
 const active=new Map();
 const audio=voice();
@@ -45,11 +47,12 @@ function curve(points,move){
   ctx.lineTo(endX*width,endY*height);
 }
 
-function openMouth(mouth,amount){
+function openMouth(mouth,amount,rounding){
   const {top,bottom,width:span,height:depth}=mouth.profile;
   const opening=Math.min(span*.53,span*.26+depth*.35)*amount;
-  const upper=top.map(([x,y],i)=>[x,y-opening*.30*Math.sin(Math.PI*i/(top.length-1))]);
-  const lower=bottom.map(([x,y],i)=>[x,y+opening*.70*Math.sin(Math.PI*i/(bottom.length-1))]);
+  const lipX=x=>mouth.x+(x-mouth.x)*(1-rounding*.32);
+  const upper=top.map(([x,y],i)=>[lipX(x),y-opening*.30*Math.sin(Math.PI*i/(top.length-1))]);
+  const lower=bottom.map(([x,y],i)=>[lipX(x),y+opening*.70*Math.sin(Math.PI*i/(bottom.length-1))]);
   ctx.beginPath();curve(upper,true);curve(lower.slice().reverse(),false);ctx.closePath();
   ctx.fillStyle='#3b202a';ctx.fill();
   const middle=upper.length>>1;
@@ -58,7 +61,7 @@ function openMouth(mouth,amount){
   ctx.save();
   ctx.clip();
   ctx.beginPath();
-  ctx.ellipse(x*width,(y-interior*.15)*height,span*width*.28,interior*height*.30,0,0,2*Math.PI);
+  ctx.ellipse(x*width,(y-interior*.15)*height,span*width*(.28-rounding*.08),interior*height*.30,0,0,2*Math.PI);
   ctx.fillStyle='#f47c91';ctx.fill();
   ctx.restore();
   ctx.beginPath();curve(upper,true);curve(lower.slice().reverse(),false);ctx.closePath();ctx.stroke();
@@ -74,6 +77,18 @@ function frame(t){
   const blink=Math.max(blinkWave(0),doubleBlink?blinkWave(205):0);
   const voiceLevel=audio.level();
   const speech=Math.min(1,voiceLevel*3);
+  if(face&&t>nextGesture){
+    gestureIndex=(gestureIndex+1)%gestures.length;
+    gestureStart=t;
+    nextGesture=t+2300+Math.random()*1300;
+    gestureSide=Math.random()<.5?-1:1;
+  }
+  const gesture=gestures[gestureIndex];
+  const progress=Math.min(1,(t-gestureStart)/900);
+  const reaction=name=>gesture===name?Math.sin(progress*Math.PI)**2*(1-speech*.8):0;
+  const look=reaction('look'), wink=reaction('wink'), brows=reaction('brows');
+  const sniff=reaction('sniff'), grin=reaction('smile'), surprise=reaction('surprise'), squint=reaction('squint');
+  const sniffMotion=sniff*Math.sin(progress*5*Math.PI);
   const dt=Math.min(45,t-lastFrame);
   lastFrame=t;
   mouthOpening+=(speech-mouthOpening)*(1-Math.exp(-dt/(speech>mouthOpening?29:70)));
@@ -83,40 +98,52 @@ function frame(t){
   const breath=Math.sin(t/620)*.5+Math.sin(t/1380)*.5;
   const smile=Math.pow(Math.max(0,Math.sin(t/1160)*Math.cos(t/1830)),3);
   const mood=moods[expression]||moods.alegría;
+  const opening=Math.max(mouthOpening, surprise*.52, grin*.26);
+  const rounding=Math.min(1,surprise+speech*(.3+.24*Math.sin(t/105)));
+  const eyeMid=face?.[0]?.role==='eye'&&face?.[1]?.role==='eye'?(face[0].x+face[1].x)/2:face?.[0]?.x;
   ctx.clearRect(0,0,width,height);
   ctx.strokeStyle='#171819';ctx.lineWidth=Math.max(3,Math.min(width,height)*.008);ctx.lineCap=ctx.lineJoin='round';
   strokes.forEach((line,i)=>{
     const anchor=face?.find(group=>group.ids.includes(i));
     const role=anchor?.role;
     const pupil=anchor?.pupils?.includes(i);
-    if(role==='mouth'&&mouthOpening>.065){
+    if(role==='mouth'&&opening>.065){
       if(i===anchor.ids[0]){
-        openMouth(anchor,mouthOpening);
+        openMouth(anchor,opening,rounding);
         ctx.beginPath();
-        for(const id of anchor.details)trace(strokes[id],([x,y])=>[x,y+anchor.profile.width*mouthOpening*.06]);
+        for(const id of anchor.details)trace(strokes[id],([x,y])=>[anchor.x+(x-anchor.x)*(1-rounding*.32),y+anchor.profile.width*opening*.06]);
         ctx.stroke();
       }
       return;
     }
-    const eyeOpen=Math.max(.06,(mood[0]+breath*.09+speech*.22)*(1-blink*.96));
+    const side=(anchor?.x??0)<eyeMid?-1:1;
+    const closing=Math.max(blink,side===gestureSide?wink:0);
+    const eyeOpen=Math.max(.06,(mood[0]+breath*.09+speech*.22+surprise*.5-squint*.6)*(1-closing*.96));
+    const eyeLook=gaze+glance+look*gestureSide*.95;
     const eyeX=(pupil?anchor.w*.13+.001:Math.min(.003,(anchor?.w||0)*.08));
     const transform=([x,y])=>{
       if(role==='eye'){
-        x+=(gaze+glance)*eyeX;
+        x+=eyeLook*eyeX;
         y=anchor.y+(y-anchor.y+(pupil?gazeUp*anchor.h*.13:0))*eyeOpen+gazeUp*.003;
+        if(anchor.h===0)y-=surprise*.004;
       }
       if(role==='mouth'){
         const center=Math.max(0,1-Math.abs(x-anchor.x)/.13);
         x=anchor.x+(x-anchor.x)*(1+breath*.04+smile*.07);
         y=anchor.y+(y-anchor.y)*(1+breath*.1);
-        y+=center*(smile*.007+(expression==='tristeza'?-.005:0));
+        y+=center*(smile*.007+grin*.014+(expression==='tristeza'?-.005:0));
       }
       if(role==='brow'){
-        const lift=anchor.w*(.12*speech+.08*breath+(expression==='sorpresa'?.17:0));
+        const arch=Math.max(0,1-2*Math.abs(x-anchor.x)/anchor.w);
+        const lift=anchor.w*(.12*speech+.08*breath+.24*surprise-.12*squint
+          +brows*(anchor.side===gestureSide?.27:.08)+arch*.14*grin+(expression==='sorpresa'?.17:0));
         y-=lift+(x-anchor.x)*anchor.side*(gaze*.15+speech*.10);
       }
-      if(role==='lash')y+=blink*.009-speech*.002;
-      if(role==='nose')y+=breath*.0015-speech*.002;
+      if(role==='lash')y+=closing*.009-speech*.002;
+      if(role==='nose'){
+        x=anchor.x+(x-anchor.x)*(1+.19*sniff+.11*speech)+sniffMotion*.006+look*gestureSide*.002;
+        y=anchor.y+(y-anchor.y)*(1-.22*sniff)+breath*.0015-speech*.002-sniff*.005;
+      }
       if(role==='cheek'){y-=smile*.005+speech*.003;x+=anchor.side*smile*.002;}
       if(role==='ear')x+=(x-anchor.x)*breath*.05;
       return [x,y];
@@ -124,7 +151,7 @@ function frame(t){
     ctx.beginPath();trace(line,transform);ctx.stroke();
     if(role==='eye'&&anchor.addPupil&&eyeOpen>.13){
       ctx.save();ctx.closePath();ctx.clip();
-      const [x,y]=transform([anchor.x+(gaze+glance)*anchor.w*.17,anchor.y+gazeUp*anchor.h*.2]);
+      const [x,y]=transform([anchor.x+eyeLook*anchor.w*.17,anchor.y+gazeUp*anchor.h*.2]);
       ctx.beginPath();
       const radius=Math.min(anchor.w*width,anchor.h*height)*.115;
       ctx.ellipse(x*width,y*height,radius,Math.max(.35,radius*eyeOpen),0,0,2*Math.PI);
@@ -240,5 +267,3 @@ if(location.hostname==='pizarramagica-1xg.pages.dev'){
 }
 
 navigator.serviceWorker?.register('/sw.js').catch(console.error);
-
-
