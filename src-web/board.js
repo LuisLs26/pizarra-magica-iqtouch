@@ -205,7 +205,7 @@ function receive(m){
       case 'volume':volume=m.value;audio.volume(volume);break;
       case 'stop':stop();break;
       case 'repeat':say(last);break;
-      case 'say':say(m.value);break;
+      case 'say':if(m.value.trim()){last=m.value;say(last);}break;
       case 'snapshot':link.send({type:'snapshot',strokes});break;
       case 'restore':if(validStrokes(m.value)){stop();clearTimeout(timer);active.clear();strokes=m.value;face=recognize(strokes);saveBoard();state();}break;
       case 'correct':face=recognize(strokes,m.value)||face;state();break;

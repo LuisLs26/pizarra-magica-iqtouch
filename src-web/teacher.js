@@ -22,7 +22,7 @@ function losePeer(){
   halt();
   if(interrupted)$('ai').textContent='La conexión se interrumpió. Cuando vuelva, graba la pregunta otra vez.';
 }
-function command(action,value){if(peer)link.send({type:'command',action,value});}
+function command(action,value){return peer&&link.send({type:'command',action,value});}
 function render(){
   $('drawings').replaceChildren(...drawings.map((drawing,index)=>{
     const li=document.createElement('li');li.append(drawing.name,' ');
@@ -178,7 +178,15 @@ $('mic').onclick=async()=>{
 for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{if(['stop','clear'].includes(b.dataset.action)){clearAudioQueue();pending?.abort();pending=null;}command(b.dataset.action);};
 $('emotion').onchange=e=>command('emotion',e.target.value.toLowerCase());
 $('volume').oninput=e=>command('volume',Number(e.target.value));
-$('speech').onsubmit=e=>{e.preventDefault();command('say',$('words').value.trim());};
+$('speech').onsubmit=e=>{
+  e.preventDefault();
+  const text=$('words').value.trim();
+  if(!text)return;
+  if(!ready){$('voice').textContent='Dibuja un rostro en la pizarra antes de enviar el texto.';return;}
+  $('voice').textContent=command('say',text)
+    ?'Texto enviado. Preparando la voz…'
+    :'Se perdió la conexión con la pizarra. Vuelve a enviar el texto.';
+};
 $('save').onclick=()=>{snapshotAction='save';command('snapshot');};
 $('correct').onclick=()=>{snapshotAction='correct';command('snapshot');};
 $('erase').onclick=()=>{if(confirm('¿Eliminar el historial de este dispositivo?')&&persist('history',[])){history=[];render();}};

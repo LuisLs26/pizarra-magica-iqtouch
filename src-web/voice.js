@@ -1,6 +1,28 @@
 const frameSeconds=.012;
 const silentFrame=Object.freeze({playing:false,openness:0,rounding:0,emphasis:0});
 
+export function splitSpeech(text){
+  const words=text.trim().split(/\s+/);
+  const parts=[];
+  let start=0;
+  while(words.length-start>(start?22:9)){
+    const limit=start?20:7;
+    const minimum=start?7:3;
+    let end=start+limit;
+    for(let i=start+minimum-1;i<start+limit;i++){
+      if(/[.!?…;,:]$/.test(words[i]))end=i+1;
+    }
+    if(!start){
+      const sentence=words.slice(0,limit).findIndex(word=>/[.!?…]["»)]*$/.test(word));
+      if(sentence>=1)end=sentence+1;
+    }
+    parts.push(words.slice(start,end).join(' '));
+    start=end;
+  }
+  parts.push(words.slice(start).join(' '));
+  return parts;
+}
+
 export function analyzeSpeech(buffer){
   const samples=buffer.getChannelData(0);
   const step=Math.max(1,Math.round(buffer.sampleRate*frameSeconds));
@@ -110,8 +132,11 @@ export function voice(){
     return new Promise((done,reject)=>{
       if(context?.state!=='running'){reject(Error('Audio bloqueado'));return;}
       const track=analyzeSpeech(buffer);
+      // Keep a short lead-in for natural onsets, including soft consonants.
+      const first=track.levels.findIndex(level=>level>track.floor);
+      const offset=first<0?0:Math.max(0,first*track.stepSeconds-.045);
       const source=context.createBufferSource();
-      gain.gain.value=volume;
+      if(volume!==undefined)gain.gain.value=volume;
       source.buffer=buffer;
       source.playbackRate.value=rate;
       source.connect(gain);
@@ -121,11 +146,23 @@ export function voice(){
         source.disconnect();
         done();
       };
-      source.start(started);
+      source.start(started,offset);
       playback={source,done};
-      articulation={track,started,rate};
+      articulation={track,started,rate,offset};
       onStart?.();
     });
+  }
+  async function synthesize(text){
+    const job=requestSpeech(text);
+    speechJob=job;
+    const timeout=setTimeout(()=>{
+      if(pending.has(job.id))resetWorker(Error('Piper tardó en cargar'));
+    },18000);
+    try{return await context.decodeAudioData(await job.promise);}
+    finally{
+      clearTimeout(timeout);
+      if(speechJob===job)speechJob=null;
+    }
   }
   prepare();
   return {unlock,stop,volume(v){if(gain)gain.gain.value=v;},speechFrame(){
@@ -135,8 +172,9 @@ export function voice(){
     const outputTime=stamp?.contextTime+age;
     const time=stamp?.performanceTime>0&&age>=0&&age<.25&&Number.isFinite(outputTime)
       ?Math.min(context.currentTime,outputTime):context.currentTime;
-    const {track,started,rate}=articulation;
-    const seconds=(time-started)*rate;
+    const {track,started,rate,offset}=articulation;
+    if(time<started)return silentFrame;
+    const seconds=offset+(time-started)*rate;
     if(seconds>=track.duration)articulation=null;
     return sampleSpeech(track,seconds);
   },async clip(name,volume){const id=serial;const data=await fetch('/audio/'+name+'.wav').then(r=>{if(!r.ok)throw Error('Audio');return r.arrayBuffer();});if(!context||id!==serial)return;const decoded=await context.decodeAudioData(data);if(id===serial)await play(decoded,volume,1);},
@@ -150,19 +188,20 @@ export function voice(){
       }
       if(id!==serial)return;
       if(context?.state!=='running')throw Error('Audio bloqueado');
-      const job=requestSpeech(text);
-      speechJob=job;
-      const timeout=setTimeout(()=>{
-        if(pending.has(job.id))resetWorker(Error('Piper tardó en cargar'));
-      },18000);
-      const audio=await job.promise.finally(()=>{
-        clearTimeout(timeout);
-        if(speechJob===job)speechJob=null;
-      });
-      if(id!==serial)return;
-      const buffer=await context.decodeAudioData(audio);
-      if(id!==serial)return;
-      await play(buffer,volume,1.31,()=>onStart?.('Piper'));
+      const parts=splitSpeech(text);
+      let next=synthesize(parts[0]);
+      for(let i=0;i<parts.length;i++){
+        const buffer=await next;
+        if(id!==serial)return;
+        const playing=play(buffer,i===0?volume:undefined,1.31,i===0?()=>onStart?.('Piper'):undefined);
+        if(parts[i+1]){
+          next=synthesize(parts[i+1]);
+          // The next chunk may fail while the current one is still playing.
+          void next.catch(()=>{});
+          await playing;
+          if(id!==serial)return;
+        }else await playing;
+      }
     }catch(error){
       if(id!==serial)return;
       throw error;
