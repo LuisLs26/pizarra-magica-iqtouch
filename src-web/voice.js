@@ -1,6 +1,7 @@
 export function voice(){
   let context, analyser, gain, source, resolve, serial=0, model, warmup;
   const samples=new Uint8Array(512);
+  const speech={level:0,brightness:0};
   const voiceId='es_ES-davefx-medium';
   function getPiper(){
     model??=import('@mintplex-labs/piper-tts-web').catch(error=>{
@@ -32,9 +33,20 @@ export function voice(){
     });
   }
   prepare();
-  return {unlock,stop,volume(v){if(gain)gain.gain.value=v;},level(){
-    if(source){analyser.getByteTimeDomainData(samples);return Math.min(1,Math.sqrt(samples.reduce((s,n)=>s+((n-128)/128)**2,0)/samples.length)*5);}
-    return 0;
+  return {unlock,stop,volume(v){if(gain)gain.gain.value=v;},speechFrame(){
+    let energy=0, highEnergy=0, previous=0;
+    if(source){
+      analyser.getByteTimeDomainData(samples);
+      for(const byte of samples){
+        const sample=(byte-128)/128;
+        energy+=sample*sample;
+        highEnergy+=(sample-previous)**2;
+        previous=sample;
+      }
+    }
+    speech.level=Math.sqrt(energy/samples.length);
+    speech.brightness=energy>0?Math.min(1,Math.sqrt(highEnergy/energy)*1.7):0;
+    return speech;
   },async clip(name,volume){const id=serial;const data=await fetch('/audio/'+name+'.wav').then(r=>{if(!r.ok)throw Error('Audio');return r.arrayBuffer();});if(!context||id!==serial)return;const decoded=await context.decodeAudioData(data);if(id===serial)await play(decoded,volume,1);},
   async speak(text,volume,onStart){
     const id=serial;
