@@ -226,3 +226,34 @@ test('activar, transcribir y terminar el dictado no envían una pregunta',async(
   assert.equal(requests[0].body.question,'¿Qué hace mi gato?');
   assert.equal(messages.at(-1).answer,'Un gato tiene sueño de campeón.');
 });
+test('solo el control activa el dibujo y permite preguntar',async()=>{
+  const source=await readFile(new URL('../src-web/board.js',import.meta.url),'utf8');
+  const snippet=source.slice(source.indexOf('const canvas='),source.indexOf('const moods='));
+  const stop=source.slice(source.indexOf('function stop()'),source.indexOf('async function say('));
+  const handler=source.slice(source.indexOf('function receive('),source.indexOf('function hidePairing('));
+  const events=[];
+  const canvas={clientWidth:1000,clientHeight:1000,setPointerCapture(){},getContext:()=>({setTransform(){}})};
+  const remote=runInNewContext(snippet+stop+handler+
+    '\nlink={send:state=>events.push(state)}; ({receive,canvas,state});',{
+    recognize,validStrokes,events,devicePixelRatio:1,addEventListener(){},
+    window:{},document:{querySelector:()=>canvas,fullscreenElement:true},
+    localStorage:{getItem:()=>JSON.stringify([...eyes,mouth]),setItem(){}},
+    voice:()=>({unlock(){},stop(){}})
+  });
+  const command=(action,value)=>remote.receive({type:'command',action,value});
+  remote.state();
+  assert.equal(events.at(-1).ready,false);
+  assert.equal(events.at(-1).drawn,true);
+  const pointer={pointerId:1,clientX:450,clientY:300,button:0,width:1,height:1};
+  remote.canvas.onpointerdown(pointer);
+  command('animate');
+  assert.equal(events.at(-1).ready,false);
+  remote.canvas.onpointerup(pointer);
+  assert.equal(events.at(-1).ready,false);
+  command('animate');
+  assert.equal(events.at(-1).ready,true);
+  command('restore',[...eyes,mouth]);
+  assert.equal(events.at(-1).ready,false);
+  command('clear');
+  assert.equal(events.at(-1).drawn,false);
+});

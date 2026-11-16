@@ -2,6 +2,7 @@ import {connect} from './link.js';
 import {validStrokes} from './face.js';
 const $=id=>document.getElementById(id);
 let session,link,connected=false,peer=false,ready=false,busy=false,pending,blocked=false,snapshotAction,points=[];
+let drawn=false,needsCorrection=false;
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
 let recognition,stopping=false,dictationTimer;
 const load=key=>{try{return JSON.parse(localStorage.getItem(key)||'[]');}catch{return [];}};
@@ -9,6 +10,10 @@ let drawings=load('characters'), history=load('history');
 function persist(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true;}catch{$('connection').textContent='Almacenamiento local lleno o no disponible';return false;}}
 function controls(){
   const canAsk=peer&&ready&&!blocked&&!busy&&!pending;
+  $('animate').disabled=!peer||!drawn||ready;
+  $('animation-status').textContent=!peer?'':needsCorrection
+    ?'No se reconoció el rostro. Completa el dibujo o usa Corregir rostro.'
+    :ready?'El personaje está vivo.':drawn?'Pulsa Dar vida cuando termines de dibujar.':'Dibuja el personaje en la pizarra.';
   $('mic').disabled=!SpeechRecognition||stopping||(!recognition&&!canAsk);
   $('mic').textContent=recognition?'Terminar dictado':'Toca para hablar';
   $('question').readOnly=!!recognition;
@@ -32,7 +37,7 @@ function halt(){
 }
 function losePeer(){
   const interrupted=recognition||pending;
-  peer=false;ready=false;busy=false;
+  peer=false;ready=false;busy=false;drawn=false;needsCorrection=false;
   halt();
   if(interrupted)$('ai').textContent='Se interrumpió la conexión. Tu texto sigue aquí para enviarlo cuando vuelva.';
 }
@@ -55,7 +60,7 @@ function render(){
 function receive(m){
   if(m.type==='peer'){peer=true;$('connection').textContent='Pizarra conectada';}
   if(m.type==='peer-left'){losePeer();$('connection').textContent='Pizarra desconectada. Esperando reconexión…';}
-  if(m.type==='state'){ready=m.ready;busy=m.busy;}
+  if(m.type==='state'){ready=m.ready;busy=m.busy;drawn=m.drawn;needsCorrection=m.needsCorrection;}
   if(m.type==='provider'){
     $('voice').textContent=m.reason==='blocked'
       ?'Toca la pantalla de la pizarra para activar el audio y escuchar la respuesta.'
@@ -166,6 +171,7 @@ $('send-question').onclick=async()=>{
   }catch(error){if(!request.signal.aborted)$('ai').textContent=error.message;}
   finally{if(pending===request){pending=null;controls();}}
 };
+$('animate').onclick=()=>{if(drawn&&!ready)command('animate');};
 for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{if(['stop','clear'].includes(b.dataset.action)){halt();}command(b.dataset.action);};
 $('emotion').onchange=e=>command('emotion',e.target.value.toLowerCase());
 $('volume').oninput=e=>command('volume',Number(e.target.value));

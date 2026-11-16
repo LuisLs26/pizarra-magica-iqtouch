@@ -1,6 +1,6 @@
 # Pizarra Mágica
 
-La pantalla abre `/`. El QR lleva al panel docente. Toca el panel de vinculación en la pantalla grande para habilitar audio y pantalla completa. Usa la casita o Alt+Mayús+Q para volver a mostrar el mismo código. Escanearlo desde otro celular transfiere el control y desconecta el panel anterior. Dibuja dos ojos separados y una boca debajo. Después de una pausa, la pizarra anima los trazos. El panel permite corregir la clasificación, borrar o guardar el dibujo y operar el micrófono.
+La pantalla abre `/`. El QR lleva al panel docente. Toca el panel de vinculación en la pantalla grande para habilitar audio y pantalla completa. Usa la casita o Alt+Mayús+Q para volver a mostrar el mismo código. Escanearlo desde otro celular transfiere el control y desconecta el panel anterior. Dibuja dos ojos separados y una boca debajo. Cuando termines, pulsa **Dar vida** en el panel docente. Los dibujos recién hechos, recuperados al recargar o cargados desde la biblioteca esperan esa acción. El panel permite corregir la clasificación, borrar o guardar el dibujo y operar el micrófono.
 
 ## Instalación y despliegue
 

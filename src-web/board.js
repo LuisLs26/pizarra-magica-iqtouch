@@ -7,7 +7,7 @@ let session, sessionTimer, interruption;
 let mouthOpening=0, mouthRounding=0, speakingPose=0, lastFrame=0;
 const gestures=['look','wink','brows','sniff','smile','surprise','squint'];
 let gestureIndex=-1, gestureStart=0, nextGesture=0, gestureSide=1;
-let strokes=loadBoard(),face=recognize(strokes), timer, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
+let strokes=loadBoard(),face=null, correctedFace=null, needsCorrection=false, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
 const active=new Map();
 const audio=voice();
 let indexedFace, strokeGroups=[], speechToRetry='';
@@ -21,13 +21,28 @@ canvas.onpointerdown=e=>{
   if(speechToRetry)say(speechToRetry);
   if(!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});
   if(pairing||face||strokes.length>=100||e.button!==0||e.width>45||e.height>45)return;
-  clearTimeout(timer);canvas.setPointerCapture(e.pointerId);
+  correctedFace=null;needsCorrection=false;canvas.setPointerCapture(e.pointerId);
   const line=[point(e)];active.set(e.pointerId,line);strokes.push(line);
+  state();
 };
 canvas.onpointermove=e=>{const line=active.get(e.pointerId);if(!line)return;for(const sample of e.getCoalescedEvents?.().length?e.getCoalescedEvents():[e])if(line.length<500)line.push(point(sample));};
-function finish(e){if(!active.delete(e.pointerId)||active.size)return;timer=setTimeout(()=>{face=recognize(strokes);saveBoard();state();},2200);}
+function finish(e){if(!active.delete(e.pointerId)||active.size)return;saveBoard();state();}
 canvas.onpointerup=canvas.onpointercancel=canvas.onlostpointercapture=finish;
-function state(){link?.send({type:'state',ready:!!face,busy});}
+function state(){link?.send({type:'state',ready:!!face,drawn:strokes.length>0&&active.size===0,needsCorrection,busy});}
+function bringToLife(){
+  if(face||active.size||!strokes.length)return;
+  face=correctedFace||recognize(strokes);
+  needsCorrection=!face;
+  state();
+}
+function replaceDrawing(lines){
+  active.clear();
+  face=null;correctedFace=null;needsCorrection=false;
+  strokes=lines;
+  if(!lines.length)last='';
+  saveBoard();
+  stop();
+}
 const moods={alegría:[1,1],sorpresa:[1.35,1.5],confusión:[.8,.9],curiosidad:[1.15,1],risa:[.65,1.6],tristeza:[.8,.65],pensamiento:[.9,.8],entusiasmo:[1.25,1.3]};
 
 function trace(line,transform){
@@ -200,15 +215,23 @@ function receive(m){
   if(m.type==='reply'){last=m.answer;say(last);}
   if(m.type==='command'){
     switch(m.action){
-      case 'clear':stop();clearTimeout(timer);active.clear();face=null;strokes=[];last='';saveBoard();state();break;
+      case 'animate':bringToLife();break;
+      case 'clear':replaceDrawing([]);break;
       case 'emotion':expression=m.value;break;
       case 'volume':volume=m.value;audio.volume(volume);break;
       case 'stop':stop();break;
       case 'repeat':say(last);break;
       case 'say':if(m.value.trim()){last=m.value;say(last);}break;
       case 'snapshot':link.send({type:'snapshot',strokes});break;
-      case 'restore':if(validStrokes(m.value)){stop();clearTimeout(timer);active.clear();strokes=m.value;face=recognize(strokes);saveBoard();state();}break;
-      case 'correct':face=recognize(strokes,m.value)||face;state();break;
+      case 'restore':if(validStrokes(m.value))replaceDrawing(m.value);break;
+      case 'correct':{
+        if(active.size)break;
+        const correction=recognize(strokes,m.value);
+        needsCorrection=!correction;
+        if(correction){correctedFace=correction;if(face)face=correction;}
+        state();
+        break;
+      }
     }
   }
 }

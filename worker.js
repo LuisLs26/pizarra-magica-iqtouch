@@ -141,7 +141,11 @@ export class Room{
     if(m.type==='ping'){socket.send('{"type":"pong"}');return;}
     if(m.type==='end'){await this.alarm();return;}
     if(role==='board'){
-      if(m.type==='state'){const state={type:'state',ready:m.ready===true,busy:m.busy===true};socket.serializeAttachment(state);this.send('teacher',state);}
+      if(m.type==='state'){
+        const state={type:'state',ready:m.ready===true,drawn:m.drawn===true,needsCorrection:m.needsCorrection===true,busy:m.busy===true};
+        socket.serializeAttachment(state);
+        this.send('teacher',state);
+      }
       if(m.type==='snapshot'&&validStrokes(m.strokes))this.send('teacher',{type:'snapshot',strokes:m.strokes});
       if(m.type==='provider'&&['Piper','Voz del navegador','audio no disponible'].includes(m.provider))this.send('teacher',m);
       return;
@@ -150,7 +154,7 @@ export class Room{
     if(m.type==='reply'&&typeof m.answer==='string'&&m.answer.length<=1100)this.send('board',{type:'reply',answer:m.answer});
     if(m.type!=='command')return;
     const v=m.value;
-    const valid=['clear','stop','repeat','snapshot'].includes(m.action)||
+    const valid=['animate','clear','stop','repeat','snapshot'].includes(m.action)||
       m.action==='emotion'&&emotions.includes(v)||
       m.action==='say'&&typeof v==='string'&&v.length<=800||
       m.action==='volume'&&typeof v==='number'&&v>=0&&v<=1||

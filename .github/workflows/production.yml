@@ -30,7 +30,7 @@ jobs:
             const target = base+'/?v='+process.env.GITHUB_SHA;
             for(let attempt=0;;attempt++){
               await board.goto(target+'&attempt='+attempt);
-              if(await board.locator('#startup').count() && await board.request.get(base+'/teacher?mic=dictado-v3&v='+process.env.GITHUB_SHA).then(async r=>(await r.text()).includes('Enviar a Gemma')))break;
+              if(await board.locator('#startup').count() && await board.request.get(base+'/teacher?mic=dictado-v3&v='+process.env.GITHUB_SHA).then(async r=>(await r.text()).includes('id="animate"')))break;
               assert.ok(attempt<29,'Cloudflare no sirvió la versión nueva');
               await new Promise(resolve=>setTimeout(resolve,4000));
             }
@@ -72,6 +72,14 @@ jobs:
             await first.getByText('El control pasó a otro dispositivo. Escanea el mismo QR para recuperarlo.',{exact:true}).waitFor();
             await qr.waitFor({state:'detached'});
             assert.equal(await board.locator('body').innerText(),'');
+            const animate=teacher.getByRole('button',{name:'Dar vida',exact:true});
+            const mic=teacher.getByRole('button',{name:'Toca para hablar'});
+            await teacher.waitForFunction(()=>!document.querySelector('#animate').disabled);
+            await new Promise(resolve=>setTimeout(resolve,2400));
+            assert.ok(await mic.isDisabled(),'El rostro solo debe cobrar vida mediante el control');
+            await animate.click();
+            await teacher.waitForFunction(()=>!document.querySelector('#mic').disabled);
+            assert.ok(await animate.isDisabled());
             const requests=[];
             teacher.on('request', req=>{
               if(/\/api\/(audio|transcribe|question)\//.test(new URL(req.url()).pathname))requests.push(req);
