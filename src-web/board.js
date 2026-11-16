@@ -3,7 +3,7 @@ import {recognize,validStrokes} from './face.js';
 import {connect} from './link.js';
 import {voice} from './voice.js';
 const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
-let pairingTimer, interruption, returning=false;
+let session, sessionTimer, interruption;
 let mouthOpening=0, mouthRounding=0, speakingPose=0, lastFrame=0;
 const gestures=['look','wink','brows','sniff','smile','surprise','squint'];
 let gestureIndex=-1, gestureStart=0, nextGesture=0, gestureSide=1;
@@ -195,8 +195,8 @@ async function say(text){
 const offline=['offline-1','offline-2','offline-3'];
 async function announcement(name){if(!face||busy)return;busy=true;state();const turn=++ticket;try{await audio.clip(name,volume);}catch{}finally{if(turn===ticket){busy=false;state();}}}
 function receive(m){
-  if(m.type==='peer'){clearTimeout(pairingTimer);sessionStorage.setItem('paired','1');if(pairing){pairing.remove();pairing=null;}state();}
-  if(m.type==='end'){if(returning){location.reload();return;} resetPairing();}
+  if(m.type==='peer'){sessionStorage.setItem('paired','1');hidePairing();state();}
+  if(m.type==='end')resetPairing();
   if(m.type==='reply'){last=m.answer;say(last);}
   if(m.type==='command'){
     switch(m.action){
@@ -212,22 +212,31 @@ function receive(m){
     }
   }
 }
+function hidePairing(){
+  pairing?.remove();
+  pairing=null;
+}
+async function showPairing(){
+  if(pairing||!session)return;
+  pairing=document.createElement('aside');
+  const url=new URL('/teacher?mic=dictado-v3',location.origin);url.hash=session.id+'.'+session.invite;
+  pairing.innerHTML='<h1>Vincular celular</h1><canvas aria-label="Código QR"></canvas><p>Toca aquí para activar el audio y la pantalla completa.</p>';
+  document.body.append(pairing);
+  pairing.onclick=()=>{audio.unlock();document.documentElement.requestFullscreen?.().catch(()=>{});};
+  const panel=pairing;
+  try{await QRCode.toCanvas(panel.querySelector('canvas'),url.href,{width:250});}
+  catch(error){if(pairing===panel)hidePairing();throw error;}
+}
 async function start(){
-  let session=JSON.parse(sessionStorage.getItem('board')||'null');
-  if(!session||session.expires<Date.now()||(!sessionStorage.getItem('paired')&&session.inviteUntil<Date.now())){
+  session=JSON.parse(sessionStorage.getItem('board')||'null');
+  if(!session||session.expires<=Date.now()){
     sessionStorage.removeItem('paired');
     const r=await fetch('/api/session',{method:'POST'});if(!r.ok)throw Error('No se pudo crear una sesión');
     session=await r.json();sessionStorage.setItem('board',JSON.stringify(session));
   }
-  if(!sessionStorage.getItem('paired')){
-  pairingTimer=setTimeout(resetPairing,Math.max(0,session.inviteUntil-Date.now()));
-  pairing=document.createElement('aside');
-  const url=new URL('/teacher?mic=manual-v2',location.origin);url.hash=session.id+'.'+session.invite;
-  pairing.innerHTML='<h1>Vincular celular</h1><canvas aria-label="Código QR"></canvas><p>Toca aquí para activar el audio y la pantalla completa.</p>';
-  document.body.append(pairing);
-  pairing.onclick=()=>{audio.unlock();document.documentElement.requestFullscreen?.().catch(()=>{});};
-  await QRCode.toCanvas(pairing.querySelector('canvas'),url.href,{width:250});
-  }
+  clearTimeout(sessionTimer);
+  sessionTimer=setTimeout(resetPairing,Math.max(0,session.expires-Date.now()));
+  if(!sessionStorage.getItem('paired'))await showPairing();
 
   link=connect(session.id,session.token,receive,(online,code)=>{
     clearTimeout(interruption);
@@ -248,24 +257,20 @@ function begin(){
   });
 }
 function resetPairing(){
-  clearTimeout(pairingTimer);
+  clearTimeout(sessionTimer);
   link?.close();
   clearTimeout(interruption);
   link=null;
-  pairing?.remove();
-  pairing=null;
+  hidePairing();
+  session=null;
   stop();
   sessionStorage.removeItem('board');
   sessionStorage.removeItem('paired');
   begin();
 }
 function returnToPairing(){
-  if(returning)return;
-  returning=true;
-  if(!link?.send({type:'end'})){returning=false;resetPairing();return;}
-  sessionStorage.removeItem('board');
-  sessionStorage.removeItem('paired');
-  setTimeout(()=>location.reload(),1200);
+  if(pairing&&sessionStorage.getItem('paired'))hidePairing();
+  else void showPairing().catch(console.error);
 }
 function prepareBoard(onReady){
   const startup=document.getElementById('startup');

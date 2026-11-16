@@ -1,26 +1,40 @@
 import {connect} from './link.js';
-import {encodeWav,microphone} from './mic.js';
 import {validStrokes} from './face.js';
 const $=id=>document.getElementById(id);
-let session,link,connected=false,peer=false,ready=false,busy=false,speaking=false,capture,pending,blocked=false,enableId=0,cooldown=0,snapshotAction,points=[];
-const audioQueue=[];
-let queueTimer;
-let openingMic=false;
+let session,link,connected=false,peer=false,ready=false,busy=false,pending,blocked=false,snapshotAction,points=[];
+const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+let recognition,stopping=false,dictationTimer;
 const load=key=>{try{return JSON.parse(localStorage.getItem(key)||'[]');}catch{return [];}};
 let drawings=load('characters'), history=load('history');
 function persist(key,value){try{localStorage.setItem(key,JSON.stringify(value));return true;}catch{$('connection').textContent='Almacenamiento local lleno o no disponible';return false;}}
 function controls(){
-  $('mic').disabled=openingMic||(!capture&&(!peer||!ready||blocked||busy||!!pending||audioQueue.length>0));
-  $('mic').textContent=capture?'Toca para enviar':'Toca para hablar';
+  const canAsk=peer&&ready&&!blocked&&!busy&&!pending;
+  $('mic').disabled=!SpeechRecognition||stopping||(!recognition&&!canAsk);
+  $('mic').textContent=recognition?'Terminar dictado':'Toca para hablar';
+  $('question').readOnly=!!recognition;
+  $('send-question').disabled=!canAsk||!!recognition||!$('question').value.trim();
   for(const button of document.querySelectorAll('[data-action],#save,#correct,#speech button,#end'))button.disabled=!peer;
 }
-function clearAudioQueue(){clearTimeout(queueTimer);audioQueue.length=0;}
-function halt(){clearAudioQueue();enableId++;openingMic=false;capture?.close();capture=null;pending?.abort();pending=null;controls();}
+function finishDictation(instance){
+  if(recognition!==instance)return false;
+  clearTimeout(dictationTimer);
+  recognition=null;
+  stopping=false;
+  controls();
+  return true;
+}
+function halt(){
+  const instance=recognition;
+  if(instance&&finishDictation(instance))instance.abort();
+  pending?.abort();
+  pending=null;
+  controls();
+}
 function losePeer(){
-  const interrupted=openingMic||capture||pending||audioQueue.length>0;
-  peer=false;ready=false;busy=false;speaking=false;
+  const interrupted=recognition||pending;
+  peer=false;ready=false;busy=false;
   halt();
-  if(interrupted)$('ai').textContent='La conexión se interrumpió. Cuando vuelva, graba la pregunta otra vez.';
+  if(interrupted)$('ai').textContent='Se interrumpió la conexión. Tu texto sigue aquí para enviarlo cuando vuelva.';
 }
 function command(action,value){return peer&&link.send({type:'command',action,value});}
 function render(){
@@ -41,16 +55,15 @@ function render(){
 function receive(m){
   if(m.type==='peer'){peer=true;$('connection').textContent='Pizarra conectada';}
   if(m.type==='peer-left'){losePeer();$('connection').textContent='Pizarra desconectada. Esperando reconexión…';}
-  if(m.type==='state'){ready=m.ready;if(busy&&!m.busy){cooldown=performance.now()+250;speaking=false;}busy=m.busy;drainAudio();}
+  if(m.type==='state'){ready=m.ready;busy=m.busy;}
   if(m.type==='provider'){
-    speaking=m.provider==='Piper'||m.provider==='Voz del navegador';
     $('voice').textContent=m.reason==='blocked'
       ?'Toca la pantalla de la pizarra para activar el audio y escuchar la respuesta.'
       :m.provider==='audio no disponible'
         ?'La pizarra no pudo reproducir la voz. Toca Repetir para intentarlo de nuevo.'
         :'Voz de la pizarra · '+m.provider;
   }
-  if(m.type==='end'){halt();link.close();peer=false;ready=false;busy=false;speaking=false;sessionStorage.removeItem('teacher');$('connection').textContent='Sesión finalizada. Escanea un nuevo QR.';}
+  if(m.type==='end'){halt();link.close();peer=false;ready=false;busy=false;sessionStorage.removeItem('teacher');$('connection').textContent='Sesión finalizada. Escanea un nuevo QR.';}
   if(m.type==='snapshot'&&snapshotAction){
     const action=snapshotAction;snapshotAction=null;
     if(action==='save'&&m.strokes.length){
@@ -72,110 +85,88 @@ function preview(strokes){
     if(points.length===3){command('correct',points);canvas.hidden=true;}
   };
 }
-function enqueueAudio(clips){
-  if(!peer||!ready||blocked)return;
-  if(audioQueue.length===2)audioQueue.shift();
-  audioQueue.push({clips,expires:performance.now()+15000});
-  drainAudio();
-}
-
-function drainAudio(){
-  clearTimeout(queueTimer);
-  const now=performance.now();
-  if(audioQueue.length&&audioQueue[0].expires<=now){
-    while(audioQueue[0]?.expires<=now)audioQueue.shift();
-    $('ai').textContent='La pregunta quedó en espera demasiado tiempo. Toca para hablar de nuevo.';
-    controls();
-  }
-  if(!audioQueue.length)return;
-  const expiresIn=audioQueue[0].expires-now;
-  if(!peer||!ready||blocked||pending||busy){queueTimer=setTimeout(drainAudio,expiresIn);return;}
-  const wait=cooldown-now;
-  if(wait>0){queueTimer=setTimeout(drainAudio,Math.min(wait,expiresIn));return;}
-  const clip=audioQueue.shift();
-  if(clip)submit(clip);
-}
-
-async function submit(clip){
-  const request=new AbortController();pending=request;controls();
-  $('ai').textContent='Whisper está transcribiendo y Gemma está preparando una respuesta…';
+function startDictation(){
+  const instance=new SpeechRecognition();
+  recognition=instance;
+  stopping=false;
+  const field=$('question');
+  const prefix=field.value.trim();
+  instance.lang='es-PE';
+  instance.continuous=true;
+  instance.interimResults=true;
+  instance.onresult=event=>{
+    if(recognition!==instance)return;
+    const transcript=Array.from(event.results,result=>result[0]?.transcript.trim()).filter(Boolean).join(' ');
+    field.value=[prefix,transcript].filter(Boolean).join(' ').slice(0,field.maxLength);
+  };
+  instance.onstart=()=>{if(recognition===instance)$('ai').textContent='Escuchando. Tu pregunta todavía no se ha enviado.';};
+  instance.onend=()=>{
+    if(!finishDictation(instance))return;
+    $('ai').textContent=field.value.trim()?'Revisa el texto y pulsa Enviar a Gemma.':'No se reconoció voz. Intenta de nuevo o escribe la pregunta.';
+  };
+  instance.onerror=event=>{
+    if(!finishDictation(instance))return;
+    $('ai').textContent=event.error==='not-allowed'
+      ?'Permite el micrófono en Chrome o escribe la pregunta.'
+      :event.error==='network'
+        ?'El dictado no pudo conectarse. Puedes escribir la pregunta.'
+        :'El dictado se interrumpió. Puedes editar el texto o volver a dictar.';
+  };
   try{
-    const send=(route,input)=>fetch('/api/'+route+'/'+session.id,{
+    instance.start();
+    $('ai').textContent='Activando el micrófono…';
+    controls();
+  }catch{
+    finishDictation(instance);
+    $('ai').textContent='No se pudo iniciar el dictado. Puedes escribir la pregunta.';
+  }
+}
+$('mic').onclick=()=>{
+  if(stopping)return;
+  if(recognition){
+    const instance=recognition;
+    stopping=true;controls();
+    dictationTimer=setTimeout(()=>{
+      if(!finishDictation(instance))return;
+      instance.abort();
+      $('ai').textContent='Revisa el texto y pulsa Enviar a Gemma.';
+    },3500);
+    try{instance.stop();}catch{if(finishDictation(instance))$('ai').textContent='Revisa el texto y pulsa Enviar a Gemma.';}
+  }else if(SpeechRecognition&&peer&&ready&&!busy&&!pending&&!blocked)startDictation();
+};
+$('question').oninput=controls;
+$('send-question').onclick=async()=>{
+  const field=$('question');
+  const draft=field.value;
+  const question=draft.trim();
+  if(!question||recognition||pending||!peer||!ready||busy||blocked)return;
+  const request=new AbortController();
+  pending=request;controls();
+  $('ai').textContent='Gemma está preparando la respuesta…';
+  try{
+    const response=await fetch('/api/question/'+session.id,{
       method:'POST',signal:request.signal,
       headers:{'Content-Type':'application/json','X-Pizarra-Send':'manual',Authorization:'Bearer '+session.token},
-      body:JSON.stringify(input)
+      body:JSON.stringify({
+        question,intensity:$('intensity').value,
+        context:history.filter(t=>t.session===session.id).slice(-3).map(({question,answer})=>({question,answer}))
+      })
     });
-    let input={};
-    if(clip.clips.length===1){
-      input.audio=encodeWav(clip.clips[0]);
-    }else{
-      const parts=clip.parts??=[];
-      while(parts.length<clip.clips.length){
-        const start=parts.length;
-        const batch=await Promise.all(clip.clips.slice(start,start+3).map(async wav=>{
-          const response=await send('transcribe',{audio:encodeWav(wav)});
-          const result=await response.json();
-          if(!response.ok){
-            if(response.status===429&&/cuota|diario/i.test(result.error)){blocked=true;clearAudioQueue();}
-            throw Error(result.error);
-          }
-          return result.question;
-        }));
-        parts.push(...batch);
-      }
-      input.question=parts.filter(Boolean).join(' ');
-      if(!input.question){$('ai').textContent='No se detectaron palabras claras.';return;}
-    }
-    const response=await send('audio',{
-      ...input,intensity:$('intensity').value,
-      context:history.filter(t=>t.session===session.id).slice(-3).map(({question,answer})=>({question,answer}))
-    });
-    const m=await response.json();
-    if(response.status===409){
-      if(request.signal.aborted)return;
-      if(clip.expires<=performance.now())throw Error('La pizarra sigue ocupada. Toca para hablar de nuevo.');
-      if(audioQueue.length===2)audioQueue.pop();
-      audioQueue.unshift(clip);
-      cooldown=performance.now()+250;
-      $('ai').textContent='La pizarra está ocupada. Tu pregunta está en espera.';
-      return;
-    }
-    if(!response.ok){
-      if(response.status===429&&/cuota|diario/i.test(m.error)){blocked=true;clearAudioQueue();}
-      throw Error(m.error);
-    }
+    const data=await response.json();
     if(request.signal.aborted)return;
-    if(m.silent){$('ai').textContent='Escuchando. No se detectaron palabras claras.';return;}
-    const next=[...history,{question:m.question,answer:m.answer,date:Date.now(),session:session.id}].slice(-300);
+    if(!response.ok){
+      if(response.status===429&&/cuota|diario/i.test(data.error))blocked=true;
+      throw Error(data.error);
+    }
+    if(!peer||!link.send({type:'reply',answer:data.answer}))throw Error('La pizarra se desconectó antes de recibir la respuesta.');
+    if(field.value===draft)field.value='';
+    const next=[...history,{question,answer:data.answer,date:Date.now(),session:session.id}].slice(-300);
     if(persist('history',next)){history=next;render();}
-    if(!peer||!link.send({type:'reply',answer:m.answer}))throw Error('La pizarra se desconectó antes de recibir la respuesta');
-    cooldown=performance.now()+900;
-    $('ai').textContent='Whisper y Gemma respondieron correctamente.';
-  }catch(e){if(!request.signal.aborted)$('ai').textContent=e.message;}finally{if(pending===request){pending=null;drainAudio();controls();}}
-}
-$('mic').onclick=async()=>{
-  if(openingMic)return;
-  if(capture){
-    const clips=capture.finish();
-    capture=null;
-    if(clips?.length&&peer&&ready)enqueueAudio(clips);
-    else if(clips?.length)$('ai').textContent='La pizarra está desconectada. Vuelve a vincularla para enviar otra pregunta.';
-    else $('ai').textContent='No se detectó voz. Toca para hablar de nuevo.';
-    controls();
-    return;
-  }
-  const id=++enableId;openingMic=true;controls();
-  try{
-    const recording=await microphone(()=>!speaking,()=>{
-      halt();
-      $('ai').textContent='El sistema cerró el micrófono. Vuelve a activarlo.';
-    });
-    if(id!==enableId){recording.close();return;}
-    capture=recording;$('ai').textContent='Micrófono activo.';
-  }catch(e){if(id===enableId)$('ai').textContent='No se pudo activar el micrófono. Revisa los permisos del navegador.';}
-  finally{if(id===enableId){openingMic=false;controls();}}
+    $('ai').textContent='Respuesta enviada a la pizarra.';
+  }catch(error){if(!request.signal.aborted)$('ai').textContent=error.message;}
+  finally{if(pending===request){pending=null;controls();}}
 };
-for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{if(['stop','clear'].includes(b.dataset.action)){clearAudioQueue();pending?.abort();pending=null;}command(b.dataset.action);};
+for(const b of document.querySelectorAll('[data-action]'))b.onclick=()=>{if(['stop','clear'].includes(b.dataset.action)){halt();}command(b.dataset.action);};
 $('emotion').onchange=e=>command('emotion',e.target.value.toLowerCase());
 $('volume').oninput=e=>command('volume',Number(e.target.value));
 $('speech').onsubmit=e=>{
@@ -202,19 +193,25 @@ $('end').onclick=()=>{halt();link?.send({type:'end'});};
 async function start(){
   const [id,invite]=location.hash.slice(1).split('.');
   session=JSON.parse(sessionStorage.getItem('teacher')||'null');
-  if(id&&invite&&session?.id!==id){
+  if(id&&invite){
     const response=await fetch('/api/claim/'+encodeURIComponent(id),{method:'POST',headers:{'X-Invite':invite}});
     const data=await response.json();if(!response.ok)throw Error(data.error);
     session={id,...data};sessionStorage.setItem('teacher',JSON.stringify(session));
   }
-  if(id)window.history.replaceState(null,'',location.pathname);
+  if(id)window.history.replaceState(null,'',location.pathname+location.search);
   if(!session||session.expires<Date.now())throw Error('Escanea el QR que aparece en la pizarra.');
   link=connect(session.id,session.token,receive,(online,code)=>{
     connected=online;
     if(!online)losePeer();
-    if(code===4000){$('connection').textContent='Esta sesión está abierta en otra pestaña.';return;}
+    if(code===4000){
+      sessionStorage.removeItem('teacher');
+      $('connection').textContent='El control pasó a otro dispositivo. Escanea el mismo QR para recuperarlo.';
+      return;
+    }
     $('connection').textContent=connected?'Esperando a la pizarra…':'Reconectando…';controls();
   });
 }
+addEventListener('hashchange',()=>{if(location.hash)location.reload();});
+if(!SpeechRecognition)$('ai').textContent='El dictado no está disponible en este navegador. Abre el panel en Chrome o escribe tu pregunta.';
 render();controls();start().catch(e=>{$('connection').textContent=e.message;});
 navigator.serviceWorker?.register('/sw.js').catch(console.error);

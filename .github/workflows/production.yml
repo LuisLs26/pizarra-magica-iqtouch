@@ -17,71 +17,87 @@ jobs:
           node-version: 22
       - run: npm install --no-save playwright jsqr
       - run: npx playwright install --with-deps chromium
-      - run: sudo apt-get install -y ffmpeg
-      - run: ffmpeg -hide_banner -loglevel error -stream_loop 3 -i src-web/public/audio/offline-1.wav -af 'adelay=1600,apad=pad_dur=3' -ar 48000 -ac 1 /tmp/pizarra-test.wav
       - run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
           import {chromium} from 'playwright';
           import jsQR from 'jsqr';
           const base = 'https://pizarra-magica-iqtouch.luisnurenagonzales.workers.dev';
-          const browser = await chromium.launch({args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--use-file-for-fake-audio-capture=/tmp/pizarra-test.wav','--autoplay-policy=no-user-gesture-required']});
+          const browser = await chromium.launch({args:['--autoplay-policy=no-user-gesture-required']});
           try {
             const board = await browser.newPage({viewport:{width:900,height:640}});
-            board.on('console', message => { if (message.type()==='warning'||message.type()==='error') console.log('Pizarra:',message.text()); });
-            board.on('pageerror', error => console.log('Pizarra:',error.message));
-            await board.goto(base);
             const qr = board.locator('aside canvas');
-            await qr.waitFor();
-            const decoded = await qr.evaluate(canvas => ({width:canvas.width,height:canvas.height,data:Array.from(canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data)}));
-            const invitation = jsQR(new Uint8ClampedArray(decoded.data),decoded.width,decoded.height)?.data;
-            assert.ok(invitation?.startsWith(base+'/teacher'));
+            const target = base+'/?v='+process.env.GITHUB_SHA;
+            for(let attempt=0;;attempt++){
+              await board.goto(target+'&attempt='+attempt);
+              if(await board.locator('#startup').count() && await board.request.get(base+'/teacher?mic=dictado-v3&v='+process.env.GITHUB_SHA).then(async r=>(await r.text()).includes('Enviar a Gemma')))break;
+              assert.ok(attempt<29,'Cloudflare no sirvió la versión nueva');
+              await new Promise(resolve=>setTimeout(resolve,4000));
+            }
+            const readQr = async () => {
+              await qr.waitFor({timeout:90000});
+              const pixels = await qr.evaluate(canvas => ({width:canvas.width,height:canvas.height,data:Array.from(canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data)}));
+              return jsQR(new Uint8ClampedArray(pixels.data),pixels.width,pixels.height)?.data;
+            };
+            const invitation=await readQr();
+            assert.ok(invitation?.startsWith(base+'/teacher?mic=dictado-v3#'));
             await board.getByRole('heading',{name:'Vincular celular'}).click();
-            const teacher = await browser.newPage({viewport:{width:390,height:844},permissions:['microphone']});
-            await teacher.goto(invitation);
-            await teacher.getByText('Pizarra conectada',{exact:true}).waitFor();
+            const openPhone = async () => {
+              const phone=await browser.newPage({viewport:{width:390,height:844}});
+              await phone.addInitScript(() => {
+                window.SpeechRecognition=class {
+                  start(){
+                    this.onstart?.();
+                    this.onresult?.({results:[[{transcript:'Por qué los gatos duermen tanto'}]]});
+                  }
+                  stop(){this.onend?.();}
+                  abort(){}
+                };
+              });
+              await phone.goto(invitation);
+              await phone.getByText('Pizarra conectada',{exact:true}).waitFor();
+              return phone;
+            };
+            const first=await openPhone();
             await qr.waitFor({state:'detached'});
             for (const line of [[[230,180],[245,165],[275,171],[280,200],[238,206],[230,180]],[[590,181],[615,164],[642,177],[644,203],[595,205],[590,181]],[[325,334],[385,370],[465,371],[535,336]]]) {
               await board.mouse.move(...line[0]); await board.mouse.down();
               for (const [x,y] of line.slice(1)) await board.mouse.move(x,y,{steps:6});
               await board.mouse.up();
             }
-            const mic=teacher.getByRole('button',{name:'Toca para hablar'});
-            await teacher.waitForFunction(()=>!document.querySelector('#mic').disabled);
-            console.log('QR leído, docente vinculado y rostro reconocido.');
+            await first.getByRole('button',{name:'Toca para hablar'}).waitFor();
+            await board.getByRole('button',{name:'Volver al código QR'}).click();
+            assert.equal(await readQr(),invitation);
+            const teacher=await openPhone();
+            await first.getByText('El control pasó a otro dispositivo. Escanea el mismo QR para recuperarlo.',{exact:true}).waitFor();
+            await qr.waitFor({state:'detached'});
             assert.equal(await board.locator('body').innerText(),'');
-            let sentAt, serverTiming, transcriptions=0;
-            teacher.on('request', req => {
-              if(new URL(req.url()).pathname.startsWith('/api/transcribe/')) transcriptions++;
-              if(new URL(req.url()).pathname.startsWith('/api/audio/')) sentAt??=Date.now();
+            const requests=[];
+            teacher.on('request', req=>{
+              if(/\/api\/(audio|transcribe|question)\//.test(new URL(req.url()).pathname))requests.push(req);
             });
-            teacher.on('response', res => {
-              if(new URL(res.url()).pathname.startsWith('/api/audio/') && res.ok()) serverTiming=res.headers()['server-timing'];
-            });
-            await mic.click();
-            await teacher.getByText('Micrófono activo.',{exact:true}).waitFor();
-            await new Promise(resolve=>setTimeout(resolve,14000));
-            assert.equal(transcriptions,0);
-            assert.equal(sentAt,undefined);
-            const send=teacher.getByRole('button',{name:'Toca para enviar'});
-            assert.ok(await send.isEnabled());
+            await teacher.getByRole('button',{name:'Toca para hablar'}).click();
+            assert.equal(await teacher.locator('#question').inputValue(),'Por qué los gatos duermen tanto');
+            assert.equal(requests.length,0);
+            await teacher.getByRole('button',{name:'Terminar dictado'}).click();
+            assert.equal(requests.length,0);
+            await teacher.locator('#question').fill('¿Por qué los gatos duermen tanto?');
             const tappedAt=Date.now();
-            await send.click();
-            try {
-              await teacher.getByText('Whisper y Gemma respondieron correctamente.',{exact:true}).waitFor({timeout:50000});
-            } catch (error) {
-              console.error('Estado IA:',await teacher.locator('#ai').innerText());
-              throw error;
-            }
-            assert.ok((await teacher.locator('#history li').first().innerText()).includes('→'));
-            assert.equal(await teacher.getByRole('button',{name:'Toca para enviar'}).count(),0);
-            console.log('Captura WAV, Whisper y Gemma completaron un turno real.');
+            await teacher.getByRole('button',{name:'Enviar a Gemma'}).click();
+            const delivered=teacher.getByText('Respuesta enviada a la pizarra.',{exact:true});
+            try{await delivered.waitFor({timeout:60000});}
+            catch(error){console.error('Estado IA:',await teacher.locator('#ai').innerText());throw error;}
             await teacher.getByText('Voz de la pizarra · Piper',{exact:true}).waitFor({timeout:90000});
-            assert.ok(transcriptions>=2);
-            console.log('Grabación de 14 segundos enviada manualmente en '+transcriptions+' tramos. Inicio de voz después de '+(Date.now()-tappedAt)+' ms. '+(serverTiming||'Sin tiempos del servidor'));
-            console.log('Piper generó y reprodujo el audio en el navegador de la pizarra.');
+            assert.equal(requests.length,1);
+            assert.ok(new URL(requests[0].url()).pathname.startsWith('/api/question/'));
+            const payload=requests[0].postDataJSON();
+            assert.equal(payload.question,'¿Por qué los gatos duermen tanto?');
+            assert.equal(payload.audio,undefined);
+            assert.ok((await teacher.locator('#history li').first().innerText()).includes('→'));
+            console.log('Mismo QR y traspaso de control verificados. Gemma recibió solo texto y Piper empezó en '+(Date.now()-tappedAt)+' ms.');
             await teacher.getByRole('button',{name:'Borrar rostro'}).click();
             await teacher.waitForFunction(()=>document.querySelector('#mic').disabled);
             await teacher.getByRole('button',{name:'Cerrar sesión'}).click();
+            assert.notEqual(await readQr(),invitation);
           } finally { await browser.close(); }
           JS
