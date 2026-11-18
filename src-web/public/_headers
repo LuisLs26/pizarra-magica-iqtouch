@@ -3,3 +3,13 @@
   Referrer-Policy: no-referrer
   X-Frame-Options: DENY
   Permissions-Policy: microphone=(self), camera=(), geolocation=()
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/teacher
+  Cache-Control: no-cache
+/teacher.html
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache

@@ -16,7 +16,8 @@ jobs:
         with:
           node-version: 22
       - run: npm install --no-save playwright jsqr
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium
+        timeout-minutes: 2
       - run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
@@ -30,7 +31,7 @@ jobs:
             const target = base+'/?v='+process.env.GITHUB_SHA;
             for(let attempt=0;;attempt++){
               await board.goto(target+'&attempt='+attempt);
-              if(await board.locator('#startup').count() && await board.request.get(base+'/teacher?mic=dictado-v3&v='+process.env.GITHUB_SHA).then(async r=>(await r.text()).includes('id="animate"')))break;
+              if(await board.locator('#startup').count() && await board.request.get(base+'/teacher?mic=dictado-v3&v='+process.env.GITHUB_SHA).then(async r=>(await r.text()).includes('Borrar anotaciones')))break;
               assert.ok(attempt<29,'Cloudflare no sirvió la versión nueva');
               await new Promise(resolve=>setTimeout(resolve,4000));
             }
