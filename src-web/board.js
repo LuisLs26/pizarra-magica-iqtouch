@@ -9,10 +9,13 @@ const gestures=['look','wink','brows','sniff','smile','surprise','squint'];
 let gestureIndex=-1, gestureStart=0, nextGesture=0, gestureSide=1;
 let strokes=loadBoard(),face=null, correctedFace=null, needsCorrection=false, link, width,height, pairing, last='', expression='alegría', busy=false, ticket=0,volume=.8, nextBlink=0,blinkStart=-1000, doubleBlink=false, disconnected=false;
 const active=new Map();
+let notes=loadNotes();
 const audio=voice();
 let indexedFace, strokeGroups=[], speechToRetry='';
 function loadBoard(){try{const lines=JSON.parse(localStorage.getItem('board-drawing'));return validStrokes(lines)?lines:[];}catch{return [];}}
 function saveBoard(){try{localStorage.setItem('board-drawing',JSON.stringify(strokes));}catch{}}
+function loadNotes(){try{const lines=JSON.parse(localStorage.getItem('board-notes'));return validStrokes(lines)?lines:[];}catch{return [];}}
+function saveNotes(){try{localStorage.setItem('board-notes',JSON.stringify(notes));}catch{}}
 function resize(){width=canvas.clientWidth;height=canvas.clientHeight;const d=Math.min(devicePixelRatio,2);canvas.width=width*d;canvas.height=height*d;ctx.setTransform(d,0,0,d,0,0);}
 addEventListener('resize',resize);resize();
 function point(e){return [Math.min(1,Math.max(0,e.clientX/width)),Math.min(1,Math.max(0,e.clientY/height))];}
@@ -20,13 +23,15 @@ canvas.onpointerdown=e=>{
   audio.unlock();
   if(speechToRetry)say(speechToRetry);
   if(!document.fullscreenElement)document.documentElement.requestFullscreen?.().catch(()=>{});
-  if(pairing||face||strokes.length>=100||e.button!==0||e.width>45||e.height>45)return;
-  correctedFace=null;needsCorrection=false;canvas.setPointerCapture(e.pointerId);
-  const line=[point(e)];active.set(e.pointerId,line);strokes.push(line);
+  const target=face?notes:strokes;
+  if(pairing||target.length>=100||e.button!==0||e.width>45||e.height>45)return;
+  if(!face){correctedFace=null;needsCorrection=false;}
+  canvas.setPointerCapture(e.pointerId);
+  const line=[point(e)];active.set(e.pointerId,line);target.push(line);
   state();
 };
 canvas.onpointermove=e=>{const line=active.get(e.pointerId);if(!line)return;for(const sample of e.getCoalescedEvents?.().length?e.getCoalescedEvents():[e])if(line.length<500)line.push(point(sample));};
-function finish(e){if(!active.delete(e.pointerId)||active.size)return;saveBoard();state();}
+function finish(e){if(!active.delete(e.pointerId)||active.size)return;saveBoard();saveNotes();state();}
 canvas.onpointerup=canvas.onpointercancel=canvas.onlostpointercapture=finish;
 function state(){link?.send({type:'state',ready:!!face,drawn:strokes.length>0&&active.size===0,needsCorrection,busy});}
 function bringToLife(){
@@ -185,6 +190,10 @@ function frame(t){
       ctx.fillStyle='#171819';ctx.fill();ctx.restore();
     }
   });
+  ctx.lineWidth=Math.max(2,Math.min(width,height)*.004);
+  for(const line of notes){
+    ctx.beginPath();trace(line,point=>point);ctx.stroke();
+  }
 }
 requestAnimationFrame(frame);
 function stop(){ticket++;speechToRetry='';audio.stop();busy=false;state();}
@@ -217,6 +226,7 @@ function receive(m){
     switch(m.action){
       case 'animate':bringToLife();break;
       case 'clear':replaceDrawing([]);break;
+      case 'clear-notes':active.clear();notes=[];saveNotes();state();break;
       case 'emotion':expression=m.value;break;
       case 'volume':volume=m.value;audio.volume(volume);break;
       case 'stop':stop();break;

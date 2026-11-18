@@ -233,12 +233,13 @@ test('solo el control activa el dibujo y permite preguntar',async()=>{
   const stop=source.slice(source.indexOf('function stop()'),source.indexOf('async function say('));
   const handler=source.slice(source.indexOf('function receive('),source.indexOf('function hidePairing('));
   const events=[];
+  const saved=new Map();
   const canvas={clientWidth:1000,clientHeight:1000,setPointerCapture(){},getContext:()=>({setTransform(){}})};
   const remote=runInNewContext(snippet+stop+handler+
     '\nlink={send:state=>events.push(state)}; ({receive,canvas,state});',{
     recognize,validStrokes,events,devicePixelRatio:1,addEventListener(){},
     window:{},document:{querySelector:()=>canvas,fullscreenElement:true},
-    localStorage:{getItem:()=>JSON.stringify([...eyes,mouth]),setItem(){}},
+    localStorage:{getItem:key=>key==='board-drawing'?JSON.stringify([...eyes,mouth]):null,setItem:(key,value)=>saved.set(key,JSON.parse(value))},
     voice:()=>({unlock(){},stop(){}})
   });
   const command=(action,value)=>remote.receive({type:'command',action,value});
@@ -252,6 +253,16 @@ test('solo el control activa el dibujo y permite preguntar',async()=>{
   remote.canvas.onpointerup(pointer);
   assert.equal(events.at(-1).ready,false);
   command('animate');
+  assert.equal(events.at(-1).ready,true);
+  const drawing=JSON.stringify(saved.get('board-drawing'));
+  remote.canvas.onpointerdown({...pointer,pointerId:2,clientX:850});
+  remote.canvas.onpointermove({...pointer,pointerId:2,clientX:900});
+  remote.canvas.onpointerup({pointerId:2});
+  assert.equal(events.at(-1).ready,true);
+  assert.equal(JSON.stringify(saved.get('board-drawing')),drawing);
+  assert.equal(saved.get('board-notes').length,1);
+  command('clear-notes');
+  assert.equal(saved.get('board-notes').length,0);
   assert.equal(events.at(-1).ready,true);
   command('restore',[...eyes,mouth]);
   assert.equal(events.at(-1).ready,false);

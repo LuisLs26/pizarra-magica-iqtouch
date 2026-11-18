@@ -154,7 +154,7 @@ export class Room{
     if(m.type==='reply'&&typeof m.answer==='string'&&m.answer.length<=1100)this.send('board',{type:'reply',answer:m.answer});
     if(m.type!=='command')return;
     const v=m.value;
-    const valid=['animate','clear','stop','repeat','snapshot'].includes(m.action)||
+    const valid=['animate','clear','clear-notes','stop','repeat','snapshot'].includes(m.action)||
       m.action==='emotion'&&emotions.includes(v)||
       m.action==='say'&&typeof v==='string'&&v.length<=800||
       m.action==='volume'&&typeof v==='number'&&v>=0&&v<=1||

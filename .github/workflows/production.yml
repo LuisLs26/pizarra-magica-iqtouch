@@ -80,6 +80,13 @@ jobs:
             await animate.click();
             await teacher.waitForFunction(()=>!document.querySelector('#mic').disabled);
             assert.ok(await animate.isDisabled());
+            await board.mouse.move(750,450);await board.mouse.down();
+            await board.mouse.move(810,480,{steps:8});await board.mouse.up();
+            assert.equal(await board.evaluate(()=>JSON.parse(localStorage.getItem('board-notes')).length),1);
+            assert.ok(await animate.isDisabled());
+            await teacher.getByRole('button',{name:'Borrar anotaciones',exact:true}).click();
+            await board.waitForFunction(()=>localStorage.getItem('board-notes')==='[]');
+            assert.ok(await animate.isDisabled());
             const requests=[];
             teacher.on('request', req=>{
               if(/\/api\/(audio|transcribe|question)\//.test(new URL(req.url()).pathname))requests.push(req);
