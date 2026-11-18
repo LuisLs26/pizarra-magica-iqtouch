@@ -192,6 +192,7 @@ test('activar, transcribir y terminar el dictado no envían una pregunta',async(
     return fields.get(id);
   };
   runInNewContext(source.replace(/^import .*\r?\n/gm,''),{
+    frejolitoScript:[],
     window:{webkitSpeechRecognition:class{
       constructor(){service=this;}
       start(){this.onstart();}

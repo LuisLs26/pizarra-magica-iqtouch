@@ -1,5 +1,6 @@
 import {connect} from './link.js';
 import {validStrokes} from './face.js';
+import {frejolitoScript} from './script.js';
 const $=id=>document.getElementById(id);
 let session,link,connected=false,peer=false,ready=false,busy=false,pending,blocked=false,snapshotAction,points=[];
 let drawn=false,needsCorrection=false;
@@ -19,6 +20,7 @@ function controls(){
   $('question').readOnly=!!recognition;
   $('send-question').disabled=!canAsk||!!recognition||!$('question').value.trim();
   for(const button of document.querySelectorAll('[data-action],#save,#correct,#speech button,#end'))button.disabled=!peer;
+  for(const button of document.querySelectorAll('#script button'))button.disabled=!peer||!ready;
 }
 function finishDictation(instance){
   if(recognition!==instance)return false;
@@ -42,6 +44,35 @@ function losePeer(){
   if(interrupted)$('ai').textContent='Se interrumpió la conexión. Tu texto sigue aquí para enviarlo cuando vuelva.';
 }
 function command(action,value){return peer&&link.send({type:'command',action,value});}
+function renderScript(){
+  $('script').replaceChildren(...frejolitoScript.map(turn=>{
+    const card=document.createElement('article');
+    card.className='script-turn';
+    const title=document.createElement('h3');
+    title.textContent=turn.title;
+    const question=document.createElement('p');
+    question.textContent=turn.question;
+    const details=document.createElement('details');
+    const summary=document.createElement('summary');
+    summary.textContent='Ver respuesta de Frejolito';
+    const answer=document.createElement('p');
+    answer.textContent=turn.answer;
+    details.append(summary,answer);
+    const button=document.createElement('button');
+    button.type='button';
+    button.textContent='Reproducir respuesta';
+    button.setAttribute('aria-label','Reproducir respuesta · '+turn.title);
+    button.onclick=()=>{
+      if(!peer||!ready)return;
+      halt();
+      $('voice').textContent=command('say',turn.answer)
+        ?'Frejolito está preparando la respuesta de «'+turn.title+'».'
+        :'Se perdió la conexión. Vuelve a pulsar Reproducir respuesta.';
+    };
+    card.append(title,question,button,details);
+    return card;
+  }));
+}
 function render(){
   $('drawings').replaceChildren(...drawings.map((drawing,index)=>{
     const li=document.createElement('li');li.append(drawing.name,' ');
@@ -219,5 +250,5 @@ async function start(){
 }
 addEventListener('hashchange',()=>{if(location.hash)location.reload();});
 if(!SpeechRecognition)$('ai').textContent='El dictado no está disponible en este navegador. Abre el panel en Chrome o escribe tu pregunta.';
-render();controls();start().catch(e=>{$('connection').textContent=e.message;});
+renderScript();render();controls();start().catch(e=>{$('connection').textContent=e.message;});
 navigator.serviceWorker?.register('/sw.js').catch(console.error);
